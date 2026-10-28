@@ -1,0 +1,14 @@
+{
+  "domain": "sam_energiemanager",
+  "name": "Energiemanager",
+  "codeowners": [
+    "@Gamers-ElitE"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/Gamers-ElitE/ha-energiemanager",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/Gamers-ElitE/ha-energiemanager/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
