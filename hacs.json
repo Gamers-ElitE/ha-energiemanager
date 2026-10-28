@@ -1,5 +1,6 @@
 {
   "name": "Energiemanager",
   "homeassistant": "2026.10.0",
-  "hacs": "2.0.5"
+  "hacs": "2.0.5",
+  "render_readme": true
 }

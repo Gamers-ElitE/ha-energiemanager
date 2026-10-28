@@ -123,7 +123,7 @@ resolve_venv_path() {
 # Activate the Home Assistant virtual environment if not already active.
 # Silently skips when VIRTUAL_ENV is already set (e.g. in CI or nested calls).
 activate_venv() {
-    if [[ -n ${VIRTUAL_ENV:-} ]]; then
+    if [[ -n ${VIRTUAL_ENV:-} && "${VIRTUAL_ENV}" != "/lsiopy" ]]; then
         return 0
     fi
     local venv_path

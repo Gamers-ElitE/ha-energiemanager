@@ -3,414 +3,250 @@
 [![GitHub Release][releases-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]](LICENSE)
-
 [![hacs][hacsbadge]][hacs]
 ![Project Maintenance][maintenance-shield]
 
-<!--
-Uncomment and customize these badges if you want to use them:
+Home Assistant Custom Integration zur intelligenten Nulleinspeisung, Prioritäten-Kaskadierung und dynamischen 1-phasigen PV-Überschussladung (Tesla via lokalem BLE-über-MQTT) inklusive Hardware-Schutzverriegelung für Heimspeicher (Anker Solarbank) und transparentem Session-Tracking nach dem WashData-Prinzip.
 
-[![BuyMeCoffee][buymecoffeebadge]][buymecoffee]
-[![Discord][discord-shield]][discord]
--->
+---
 
-**✨ Develop in the cloud:** Want to contribute or customize this integration? Open it directly in GitHub Codespaces - no local setup required!
+## ✨ Features im Überblick
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Gamers-ElitE/ha-energiemanager?quickstart=1)
+- **Nulleinspeisung mit EMA-Filterung:**
+  - Glättung des Netzzählers mittels exponentiellem gleitendem Mittelwert (EMA, $\alpha = 0{,}35$) gegen kurzzeitige Leistungsspitzen (z. B. Induktionskochfeld).
+  - Symmetrische Totzone von $\pm 60\,\text{W}$ verhindert ständiges Takten und Schwingungen der Stellglieder.
+- **5-stufige Prioritäten-Kaskade:**
+  1. **Hausgrundlast:** Automatisch vorrangig durch phasenübergreifende Saldierung des Netzzählers.
+  2. **Heimspeicher (Anker Solarbank):** Konfigurierbarer Mindest-Reserve-SOC (0–100 %) via Schieberegler (z. B. Sommer 60 %, Winter 0 %).
+  3. **Thermischer Puffer (Multisplit-Klimaanlage):** Nutzt moderate Überschüsse ($500\,\text{W}$ bis $1.350\,\text{W}$) zur Verschiebung der Raum-Solltemperatur um $\pm 1{,}5\,^\circ\text{C}$ (mit 20 Minuten Kompressorschutz-Mindestlaufzeit).
+  4. **Elektrofahrzeug (Tesla via Mobile Connector):** Dynamische 1-phasige Überschussladung ab $1.380\,\text{W}$ ($6\,\text{A}$).
+  5. **Resteinspeisung ins Netz:** Verbleibender Überschuss nach Deckung der Stufen 1–4.
+- **Akku-Schutzverriegelung (Hardware-Schutz):**
+  - Verhindert das verlustbehaftete Entladen des Heimspeichers in die Autobatterie.
+  - Sobald Ladeleistung $> 250\,\text{W}$: Automatische Aktivierung der Entladesperre des Speichers.
+  - Abschaltverzögerung von 60 Sekunden nach Ladeende ($\le 250\,\text{W}$) vor Freigabe der Speicherentladung.
+- **1-Phasen Tesla-Ladesteuerung (230 V via lokalem BLE-über-MQTT):**
+  - Einstellbereich von $6\,\text{A}$ ($1.380\,\text{W}$) bis $16\,\text{A}$ ($3.680\,\text{W}$) in präzisen $230\,\text{W}$-Schritten ($1\,\text{A}$).
+  - Modi: `Aus`, `PV-Überschuss` (inkl. 180 s Wolkenpuffer bei 6 A), `Schnellladen` (maximale Ladeleistung bis Ziel-SOC).
+  - Lokale Steuerung: Automatische Fahrzeug-Präsenzerkennung und Wake-up-Trigger ohne Cloud-Latenz.
+- **Session-Tracking nach dem WashData-Prinzip:**
+  - Automatische Lade-Sitzungserkennung (Steckerstatus & Ladeleistung $> 200\,\text{W}$).
+  - Echtzeit-Zerlegung des Ladestroms in Solar- und Netzanteil.
+  - Native Energiezähler (`state_class: total_increasing`) zur direkten Integration in das Home Assistant Energy Dashboard:
+    - `sensor.sam_energiemanager_ev_solar_lifetime_kwh`
+    - `sensor.sam_energiemanager_ev_grid_lifetime_kwh`
+  - Automatische Erstellung einer Session-Zusammenfassung und Auslösen des Events `sam_energiemanager_session_completed`.
 
-## ✨ Features
+---
 
-- **Easy Setup**: Simple configuration through the UI - no YAML required
-- **Air Quality Monitoring**: Track AQI and PM2.5 levels in real-time
-- **Filter Management**: Monitor filter life and get replacement alerts
-- **Smart Control**: Adjust fan speed, target humidity, and operating modes
-- **Child Lock**: Safety feature to prevent accidental changes
-- **Diagnostic Info**: View filter life, runtime hours, and device statistics
-- **Reconfigurable**: Change credentials anytime without removing the integration
-- **Options Flow**: Adjust settings like update interval after setup
-- **Custom Services**: Advanced control with built-in service calls
+## 🏛️ Architektur & Regelkreis
 
-**This integration will set up the following platforms.**
+```text
+               ┌──────────────────────────────────────┐
+               │    Netzzähler (Leistung in Watt)     │
+               └──────────────────┬───────────────────┘
+                                  │
+                                  ▼
+               ┌──────────────────────────────────────┐
+               │   EMA-Filter (α = 0,35) + Totzone    │
+               │             (±60 W)                  │
+               └──────────────────┬───────────────────┘
+                                  │
+                                  ▼
+                    P_surplus = max(0, -P_grid)
+                                  │
+       ┌──────────────────────────┼──────────────────────────┐
+       │                          │                          │
+       ▼                          ▼                          ▼
+┌──────────────┐          ┌──────────────┐          ┌──────────────────┐
+│ Stufe 2:     │          │ Stufe 3:     │          │ Stufe 4:         │
+│ Heimspeicher │          │ Klima-Puffer │          │ E-Auto (Tesla)   │
+│ Reserve-SOC  │          │ (500–1350 W) │          │ 6–16 A (1-phasig)│
+└──────────────┘          └──────────────┘          └──────────────────┘
+                                                             │
+                                                             ▼
+                                                    ┌──────────────────┐
+                                                    │ Hardware-Schutz: │
+                                                    │ Entladesperre    │
+                                                    │ Speicher aktiv   │
+                                                    └──────────────────┘
+```
 
-| Platform        | Description                                              |
-| --------------- | -------------------------------------------------------- |
-| `sensor`        | Air quality index (AQI), PM2.5, filter life, and runtime |
-| `binary_sensor` | API connection status and filter replacement alert       |
-| `switch`        | Child lock and LED display controls                      |
-| `select`        | Fan speed selection (Low/Medium/High/Auto)               |
-| `number`        | Target humidity setting (30-80%)                         |
-| `button`        | Reset filter timer after replacement                     |
-| `fan`           | Air purifier fan control with speed settings             |
+### 1. Filterung & Totzone
 
-> [!TIP]
-> **Interactive Demo:** The entities are interconnected for demonstration.
-> Press the **Reset Filter Timer** button to see **Filter Life Remaining** update to 100%.
-> Changing the **Air Purifier** fan speed syncs the **Fan Speed** select, and vice versa.
+Zur Vermeidung von Fehlauslösungen durch kurzzeitige Einschaltströme (z. B. Herdplatten) wird der Rohwert des Netzzählers über einen exponentiell geglätteten Mittelwert (EMA) berechnet:
 
-## 🚀 Quick Start
+$$P_{\text{grid\_gefiltert}}(t) = \alpha \cdot P_{\text{grid\_roh}}(t) + (1 - \alpha) \cdot P_{\text{grid\_gefiltert}}(t-1) \quad (\alpha = 0{,}35)$$
 
-### Step 1: Install the Integration
+Liegt die gefilterte Leistung im Totzonen-Fenster von $[-60\,\text{W}, +60\,\text{W}]$, verbleiben alle Stellgrößen im aktuellen Zustand, um Regelschwingungen zu unterbinden.
 
-**Prerequisites:** This integration requires [HACS](https://hacs.xyz/) (Home Assistant Community Store) to be installed.
+Der verfügbare Überschuss ergibt sich aus:
 
-Click the button below to open the integration directly in HACS:
+$$P_{\text{surplus}} = \max(0, -P_{\text{grid\_gefiltert}})$$
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jpawlowski&repository=ha-energiemanager&category=integration)
+### 2. Prioritäten-Kaskade
 
-Then:
+| Stufe | Verbraucher            | Aktivierungsbedingung                                                          | Verhalten                                                                                                         |
+| :---: | :--------------------- | :----------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
+| **1** | **Hausgrundlast**      | Immer aktiv                                                                    | Wird physikalisch vorrangig durch den Hausanschluss saldiert.                                                     |
+| **2** | **Heimspeicher**       | `battery_soc < reserve_soc`                                                    | Überschuss fließt primär in den Speicher. E-Auto-Ladung und Klimapufferung bleiben blockiert.                     |
+| **3** | **Thermischer Puffer** | `ac_buffer_enabled` & $500\,\text{W} \le P_{\text{surplus}} < 1.350\,\text{W}$ | Verschiebung der Raum-Solltemperatur um $\pm 1{,}5\,^\circ\text{C}$. Mindestlaufzeit: 20 Min. (Kompressorschutz). |
+| **4** | **Tesla E-Auto**       | $P_{\text{surplus}} \ge 1.380\,\text{W}$ oder Stufe 2 & 3 gesättigt            | 1-phasige Ladung mit $6\,\text{A}$ bis $16\,\text{A}$ ($230\,\text{W}$-Schritte).                                 |
+| **5** | **Netzeinspeisung**    | Stufen 1–4 vollständig gesättigt                                               | Überschuss wird ins öffentliche Netz eingespeist.                                                                 |
 
-1. Click "Download" to install the integration
-2. **Restart Home Assistant** (required after installation)
+### 3. Akku-Schutzverriegelung
 
-> [!NOTE]
-> The My Home Assistant redirect will first take you to a landing page. Click the button there to open your Home Assistant instance.
+Sobald die Ladeleistung des E-Autos $250\,\text{W}$ überschreitet, schaltet der Energiemanager die Entladesperre des Speichers (`switch.anker_discharge_disabled` bzw. die konfigurierte Entitäts-ID) auf `on`. Erst wenn die Ladeleistung für mindestens 60 Sekunden ununterbrochen $\le 250\,\text{W}$ beträgt, wird die Sperre wieder freigegeben (`off`).
 
-<details>
-<summary><strong>Manual Installation (Advanced)</strong></summary>
+### 4. Dynamische 1-Phasen-Ladesteuerung
 
-If you prefer not to use HACS:
+- **Spannungsbasis:** $230\,\text{V}$ (1 Phase).
+- **Regelformel:**
 
-1. Download the `custom_components/sam_energiemanager/` folder from this repository
-2. Copy it to your Home Assistant's `custom_components/` directory
-3. Restart Home Assistant
+$$I_{\text{target}} = \text{clamp}\left(\left\lfloor \frac{P_{\text{surplus}} + P_{\text{ev\_aktuell}}}{230} \right\rfloor, 6, I_{\text{max}}\right)$$
 
-</details>
+- **Lademodi:**
+  - `Aus`: Ladung gestoppt bzw. pausiert.
+  - `PV-Überschuss`: Dynamische Anpassung des Ladestroms ($6\,\text{A}$ bis $I_{\text{max}}$). Fällt der Überschuss unter $1.380\,\text{W}$, puffert ein Hysterese-Timer von 180 Sekunden bei $6\,\text{A}$ kurzzeitige Wolken ab, bevor die Ladung pausiert wird.
+  - `Schnellladen`: Lädt mit voller konfigurierter Stromstärke ($I_{\text{max}}$) aus PV und Netz, bis der Ziel-SOC (`number.sam_energiemanager_tesla_target_soc`) erreicht ist; wechselt danach automatisch auf `Aus`.
 
-### Step 2: Add and Configure the Integration
+---
 
-**Important:** You must have installed the integration first (see Step 1) and restarted Home Assistant!
+## 📊 WashData-Prinzip & Session-Tracking
 
-#### Option 1: One-Click Setup (Quick)
+Bei jedem Rechenzyklus (z. B. alle 5 bis 10 Sekunden) wird die aktuelle Ladeleistung des Fahrzeugs anhand des realen Netzflusses zerlegt:
 
-Click the button below to open the configuration dialog:
+$$P_{\text{ev\_solar}} = \min(P_{\text{ev}}, P_{\text{surplus\_vor\_ladesteigerung}})$$
+$$P_{\text{ev\_grid}} = P_{\text{ev}} - P_{\text{ev\_solar}}$$
 
-[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=sam_energiemanager)
+Daraus werden zwei fortlaufende Zähler gespeist, die direkt als Verbraucher im Home Assistant Energy Dashboard hinzugefügt werden können:
 
-Follow the setup wizard:
+- `sensor.sam_energiemanager_ev_solar_lifetime_kwh`
+- `sensor.sam_energiemanager_ev_grid_lifetime_kwh`
 
-1. Enter your username
-2. Enter your password
-3. Click Submit
+### Session-Abschluss & Automation Event
 
-That's it! The integration will start loading your data.
-
-#### Option 2: Manual Configuration
-
-1. Go to **Settings** → **Devices & Services**
-2. Click **"+ Add Integration"**
-3. Search for "Energiemanager"
-4. Follow the same setup steps as Option 1
-
-### Step 3: Adjust Settings (Optional)
-
-After setup, you can adjust options:
-
-1. Go to **Settings** → **Devices & Services**
-2. Find **Energiemanager**
-3. Click **Configure** to adjust:
-   - Update interval (how often to refresh data)
-   - Enable debug logging
-
-You can also **Reconfigure** your credentials anytime without removing the integration.
-
-### Step 4: Start Using!
-
-The integration creates several entities for your air purifier:
-
-- **Sensors**: Air quality index, PM2.5 levels, filter life remaining, total runtime
-- **Binary Sensors**: API connection status, filter replacement alert
-- **Switches**: Child lock, LED display control
-- **Select**: Fan speed (Low/Medium/High/Auto)
-- **Number**: Target humidity (30-80%)
-- **Button**: Reset filter timer
-- **Fan**: Air purifier fan control
-
-Find all entities in **Settings** → **Devices & Services** → **Energiemanager** → click on the device.
-
-## Available Entities
-
-### Sensors
-
-- **Air Quality Index (AQI)**: Real-time air quality measurement (0-500 scale)
-  - Includes air quality category (Good/Moderate/Unhealthy/etc.)
-  - Health recommendations based on current AQI
-- **PM2.5**: Fine particulate matter concentration in µg/m³
-- **Filter Life Remaining** (Diagnostic): Shows remaining filter life as percentage
-- **Total Runtime** (Diagnostic): Total operating hours of the device
-
-### Binary Sensors
-
-- **API Connection**: Shows whether the connection to the API is active
-  - On: Connected and receiving data
-  - Off: Connection lost or authentication failed
-  - Shows update interval and API endpoint information
-- **Filter Replacement Needed**: Alerts when filter needs replacement
-  - Shows estimated days remaining
-  - Turns on when filter life is low
-
-### Switches
-
-- **Child Lock**: Prevents accidental button presses on the device
-  - Icon changes based on state (locked/unlocked)
-- **LED Display**: Enable/disable the LED display
-  - Disabled by default - enable in entity settings if needed
-
-### Select
-
-- **Fan Speed**: Choose from Low, Medium, High, or Auto
-  - Icon changes dynamically based on selected speed
-  - Auto mode adjusts speed based on air quality
-  - Syncs bidirectionally with the Air Purifier fan entity
-
-### Number
-
-- **Target Humidity**: Set desired humidity level (30-80%)
-  - Adjustable in 5% increments
-  - Displayed as a slider in the UI
-
-### Button
-
-- **Reset Filter Timer**: Reset the filter life to 100%
-  - Press to reset after replacing the filter
-  - Instantly updates the Filter Life Remaining sensor
-
-### Fan
-
-- **Air Purifier**: Control the air purifier fan speed and power
-  - Three speed levels: Low, Medium, High
-  - Syncs bidirectionally with the Fan Speed select entity
-  - Turn on/off functionality
-
-## Custom Services
-
-The integration provides services for advanced automation:
-
-### `sam_energiemanager.example_action`
-
-Perform a custom action (customize this for your needs).
-
-**Example:**
+Nach dem Abstecken des Ladekabels oder bei Ladeende wird der Sensor `sensor.sam_energiemanager_last_session_summary` aktualisiert und das Event `sam_energiemanager_session_completed` gefeuert:
 
 ```yaml
-service: sam_energiemanager.example_action
+event_type: sam_energiemanager_session_completed
 data:
-  # Add your parameters here
+  session_id: "2026-10-28_14-30-00"
+  energy_total_kwh: 14.85
+  energy_solar_kwh: 12.40
+  energy_grid_kwh: 2.45
+  solar_percentage: 83.5
+  grid_percentage: 16.5
+  duration_minutes: 185
+  start_soc: 42
+  end_soc: 68
+  cost_eur: 0.78
 ```
-
-### `sam_energiemanager.reload_data`
-
-Manually refresh data from the API without waiting for the update interval.
-
-**Example:**
-
-```yaml
-service: sam_energiemanager.reload_data
-```
-
-Use these services in automations or scripts for more control.
-
-## Configuration Options
-
-### During Setup
-
-| Name     | Required | Description           |
-| -------- | -------- | --------------------- |
-| Username | Yes      | Your account username |
-| Password | Yes      | Your account password |
-
-### After Setup (Options)
-
-You can change these anytime by clicking **Configure**:
-
-| Name             | Default | Description                |
-| ---------------- | ------- | -------------------------- |
-| Update Interval  | 1 hour  | How often to refresh data  |
-| Enable Debugging | Off     | Enable extra debug logging |
-
-## Troubleshooting
-
-### Authentication Issues
-
-#### Reauthentication
-
-If your credentials expire or change, Home Assistant will automatically prompt you to reauthenticate:
-
-1. Go to **Settings** → **Devices & Services**
-2. Look for **"Action Required"** or **"Configuration Required"** message on the integration
-3. Click **"Reconfigure"** or follow the prompt
-4. Enter your updated credentials
-5. Click Submit
-
-The integration will automatically resume normal operation with the new credentials.
-
-#### Manual Credential Update
-
-You can also update credentials at any time without waiting for an error:
-
-1. Go to **Settings** → **Devices & Services**
-2. Find **Energiemanager**
-3. Click the **3 dots menu** → **Reconfigure**
-4. Enter new username/password
-5. Click Submit
-
-#### Connection Status
-
-Monitor your connection status with the **API Connection** binary sensor:
-
-- **On** (Connected): Integration is receiving data normally
-- **Off** (Disconnected): Connection lost or authentication failed
-  - Check the binary sensor attributes for diagnostic information
-  - Verify credentials if authentication failed
-  - Check network connectivity
-
-### Enable Debug Logging
-
-To enable debug logging for this integration, add the following to your `configuration.yaml`:
-
-```yaml
-logger:
-  default: info
-  logs:
-    custom_components.sam_energiemanager: debug
-```
-
-### Common Issues
-
-#### Authentication Errors
-
-If you receive authentication errors:
-
-1. Verify your username and password are correct
-2. Check that your account has the necessary permissions
-3. Wait for the automatic reauthentication prompt, or manually reconfigure
-4. Check the API Connection binary sensor for status
-
-#### Device Not Responding
-
-If your device is not responding:
-
-1. Check the **API Connection** binary sensor - it should be "On"
-2. Check your network connection
-3. Verify the device is powered on
-4. Check the integration diagnostics (Settings → Devices & Services → Energiemanager → 3 dots → Download diagnostics)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please open an issue or pull request if you have suggestions or improvements.
-
-You have two options to set up a development environment — expand below for full details.
-
-<details>
-<summary><strong>Development Setup</strong></summary>
-
-Both options provide the same fully-configured environment with Home Assistant, Python 3.14, Node.js LTS, and all necessary tools.
-
-### Option 1: GitHub Codespaces (Recommended) ☁️
-
-Develop directly in your browser without installing anything locally!
-
-1. Click the green **"Code"** button in this repository
-2. Switch to the **"Codespaces"** tab
-3. Click **"Create codespace on main"**
-4. **Wait for setup** (2-3 minutes first time) — everything installs automatically
-5. **Review and commit** your changes in the Source Control panel (`Ctrl+Shift+G`)
-
-> [!TIP]
-> Codespaces gives you **60 hours/month free** for personal accounts. When you start Home Assistant (`script/develop`), port 8123 forwards automatically.
-
-### Option 2: Local Development with VS Code 💻
-
-#### Prerequisites
-
-You'll need these installed locally:
-
-- **A Docker-compatible container engine** — see options by platform:
-
-  | Option                                                                                                                   | 🍎 macOS | 🐧 Linux | 🪟 Windows | Notes                                                                                                                                                                                                                                     |
-  | ------------------------------------------------------------------------------------------------------------------------ | :------: | :------: | :--------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | [Docker Desktop](https://www.docker.com/products/docker-desktop/)                                                        |    ✅    |    ✅    |     ✅     | **Easiest starting point for all platforms.** GUI-based, well-documented, one installer. Uses WSL2 as default backend on Windows (Hyper-V also available). Installation requires admin rights; daily use does not. Free for personal use. |
-  | [OrbStack](https://orbstack.dev/) ⭐                                                                                     |    ✅    |    —     |     —      | **Recommended for macOS** once Docker Desktop feels slow. Starts in ~2s, much lighter on RAM/CPU, full Docker API compatibility. Free for personal use.                                                                                   |
-  | [Docker CE](https://docs.docker.com/engine/install/) (native) ⭐                                                         |    —     |    ✅    |     —      | **Recommended for Linux.** Install directly via your package manager — no VM, no GUI, no overhead. Free.                                                                                                                                  |
-  | [WSL2](https://learn.microsoft.com/windows/wsl/install) + [Docker CE](https://docs.docker.com/engine/install/ubuntu/) ⭐ |    —     |    —     |     ✅     | **Recommended for Windows** once you're comfortable with WSL2. Docker runs natively inside WSL2 — no GUI overhead. Requires one-time WSL2 setup. Free.                                                                                    |
-  | [Rancher Desktop](https://rancherdesktop.io/)                                                                            |    ✅    |    ✅    |     ✅     | Open source by SUSE. GUI-based, uses WSL2 on Windows. Good alternative to Docker Desktop. Free.                                                                                                                                           |
-  | [Colima](https://github.com/abiosoft/colima)                                                                             |    ✅    |    ✅    |     —      | CLI-only, very lightweight. Good for terminal-focused workflows. Free.                                                                                                                                                                    |
-
-- **VS Code** with the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-- **Git** — macOS and Linux usually have it already; see below if not, or to get a newer version:
-  - **🍎 macOS:** The system Git (`xcode-select --install`) works fine. Recommended: `brew install git` ([Homebrew](https://brew.sh/)) for a current version.
-  - **🐧 Linux:** Usually pre-installed. If not: `sudo apt install git` (or your distro's equivalent).
-  - **🪟 Windows + WSL2 ⭐:** Install Git _inside WSL2_ with `sudo apt install git`. Git on Windows itself is not needed — VS Code clones and operates entirely within WSL2.
-  - **🪟 Windows + Docker Desktop:** Install via `winget install Git.Git` or download [Git for Windows](https://git-scm.com/download/win).
-- **Hardware** — the devcontainer runs a full Home Assistant instance including Python tooling:
-
-  |          | Minimum    | Recommended                           |
-  | -------- | ---------- | ------------------------------------- |
-  | **RAM**  | 8 GB       | 16 GB or more                         |
-  | **CPU**  | 4 cores    | 8 cores or more                       |
-  | **Disk** | 10 GB free | 20 GB free (SSD strongly recommended) |
-
-> [!TIP]
-> **Not sure which Docker option to pick?** Start with [Docker Desktop](https://www.docker.com/products/docker-desktop/) — it works on all platforms, has a GUI, and needs no extra setup. The ⭐ options are faster alternatives once you're comfortable. macOS and Linux offer the best devcontainer experience — containers run with no extra VM layer and file I/O is fast. Windows works well too; this integration uses named container volumes (files live inside WSL2, not on the Windows drive) to keep performance acceptable.
-
-> [!NOTE]
-> **New to Dev Containers?** See the [VS Code Dev Containers documentation](https://code.visualstudio.com/docs/devcontainers/containers#_system-requirements) for system requirements and how to install the extension. **Once the extension is installed, you're done** — this repository already ships a complete devcontainer configuration. You don't need to follow the rest of the VS Code guide; the setup steps below are all that's needed.
-
-#### Setup Steps
-
-1. **Clone in a Dev Container:**
-
-   **🍎 macOS / 🐧 Linux:** Clone the repository and open the folder in VS Code → click **"Reopen in Container"** when prompted (or `F1` → **"Dev Containers: Reopen in Container"**).
-
-   **🪟 Windows:** In VS Code, press `F1` → **"Dev Containers: Clone Repository in Named Container Volume..."** and enter the repository URL. This keeps files inside WSL2 for best I/O performance.
-
-2. Wait for the container to build (2-3 minutes first time)
-
-3. **Review and commit** changes in Source Control (`Ctrl+Shift+G`)
-
-4. **Start developing**:
-
-   ```bash
-   script/develop  # Home Assistant runs at http://localhost:8123
-   ```
-
-> [!NOTE]
-> Both Codespaces and local DevContainer provide the exact same experience. The only difference is where the container runs (GitHub's cloud vs. your machine).
-
-</details>
 
 ---
 
-## 🤖 AI-Assisted Development
+## 🚀 Installation & Einrichtung
 
-> [!NOTE]
-> **Transparency Notice:** This integration was developed with assistance from AI coding agents (GitHub Copilot,
-> Claude, and others). AI assistance by itself neither guarantees nor rules out software quality. To make an informed
-> installation decision, review the project's stated maturity, known limitations, automated test coverage, real-device
-> testing, and the extent of human review. The maintainer should replace the fields below with accurate project-specific
-> details rather than implying checks that were not performed. See the blueprint's [`AI_POLICY.md`](AI_POLICY.md) for
-> guidance.
->
-> - **AI assistance:** limited / substantial / predominant
-> - **Human review:** complete / partial / spot-checked / not performed
-> - **Automated tests:** [describe or state "not performed"]
-> - **Real-device or service testing:** [describe or state "not performed"]
-> - **Maturity and known limitations:** [describe]
->
-> If you encounter unexpected behavior, please [open an issue](../../issues) on GitHub.
->
-> _This section can be removed or modified if AI assistance was not used in your integration's development._
+### 1. Installation über HACS
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gamers-ElitE&repository=ha-energiemanager&category=integration)
+
+1. Öffne **HACS** → **Integrationen**.
+2. Klicke auf die drei Punkte oben rechts → **Benutzerdefinierte Repositories**.
+3. URL hinzufügen: `https://github.com/Gamers-ElitE/ha-energiemanager`, Kategorie: **Integration**.
+4. Installiere **Energiemanager** und starte Home Assistant neu.
+
+### 2. UI-Konfiguration (Config Flow)
+
+Füge die Integration unter **Einstellungen** → **Geräte & Dienste** → **Integration hinzufügen** → **Energiemanager** hinzu.
+
+Der Einrichtungs-Assistent führt dich durch die Zuordnung deiner Entitäten:
+
+- **Netzzähler:** Leistungssensor in Watt (positiv = Bezug, negativ = Einspeisung).
+- **Heimspeicher:** Batterie-SOC (%) und Entladesperren-Switch (z. B. Anker Solarbank).
+- **Tesla (lokales BLE-über-MQTT):**
+  - Ladeleistung (W)
+  - Ladestrom-Sollwert (Number/Select)
+  - Ladestatus / Steckerstatus
+  - Batterie-SOC (%)
+  - Wake-up-Button
+  - BLE-Verbindungsstatus (Präsenz)
+- **Klima / Wärmepumpe:** Climate-Entität für die thermische Pufferung.
 
 ---
 
-## 📄 License
+## 🎛️ Dashboard-Beispiele (Lovelace)
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+### 1. Energiemanager Steuerungs-Karte
+
+```yaml
+type: entities
+title: Energiemanager Steuerung
+entities:
+  - entity: select.sam_energiemanager_charging_mode
+    name: Lademodus
+  - entity: number.sam_energiemanager_tesla_max_current
+    name: Maximaler Ladestrom
+  - entity: number.sam_energiemanager_tesla_target_soc
+    name: Schnelllade-Ziel-SOC
+  - entity: number.sam_energiemanager_battery_reserve_soc
+    name: Speicher Vorrang-Reserve
+  - entity: switch.sam_energiemanager_ac_buffer_enabled
+    name: Klima-Pufferung aktivieren
+```
+
+### 2. Status & WashData-Statistik
+
+```yaml
+type: vertical-stack
+cards:
+  - type: glance
+    title: Aktuelle Leistungsflüsse
+    entities:
+      - entity: sensor.sam_energiemanager_grid_power_filtered
+        name: Netz (gefiltert)
+      - entity: sensor.sam_energiemanager_surplus_power
+        name: PV-Überschuss
+      - entity: sensor.sam_energiemanager_ev_charging_power
+        name: Ladeleistung E-Auto
+  - type: entities
+    title: Letzte Ladesitzung (WashData)
+    entities:
+      - entity: sensor.sam_energiemanager_last_session_summary
+        name: Zusammenfassung
+      - entity: sensor.sam_energiemanager_ev_solar_lifetime_kwh
+        name: E-Auto Solar gesamt
+      - entity: sensor.sam_energiemanager_ev_grid_lifetime_kwh
+        name: E-Auto Netz gesamt
+```
+
+### 3. Benachrichtigungs-Automation bei Ladeabschluss
+
+```yaml
+alias: "Energiemanager: Ladezusammenfassung senden"
+trigger:
+  - platform: event
+    event_type: sam_energiemanager_session_completed
+action:
+  - action: notify.notify
+    data:
+      title: "🚗 E-Auto Ladesitzung beendet"
+      message: >
+        Geladen: {{ trigger.event.data.energy_total_kwh }} kWh
+        Solar-Anteil: {{ trigger.event.data.solar_percentage }}% ({{ trigger.event.data.energy_solar_kwh }} kWh)
+        Netz-Anteil: {{ trigger.event.data.grid_percentage }}% ({{ trigger.event.data.energy_grid_kwh }} kWh)
+        Dauer: {{ trigger.event.data.duration_minutes }} Min. | Kosten: {{ trigger.event.data.cost_eur }} €
+```
+
+---
+
+## 📄 Lizenz
+
+Dieses Projekt ist lizenziert unter der MIT-Lizenz – siehe [LICENSE](LICENSE) für Details.
 
 ---
 
 **Made with ❤️ by [@Gamers-ElitE][user_profile]**
-
----
 
 [commits-shield]: https://img.shields.io/github/commit-activity/y/Gamers-ElitE/ha-energiemanager.svg?style=for-the-badge
 [commits]: https://github.com/Gamers-ElitE/ha-energiemanager/commits/main
@@ -420,11 +256,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [maintenance-shield]: https://img.shields.io/badge/maintainer-%40Gamers-ElitE-blue.svg?style=for-the-badge
 [releases-shield]: https://img.shields.io/github/release/Gamers-ElitE/ha-energiemanager.svg?style=for-the-badge
 [releases]: https://github.com/Gamers-ElitE/ha-energiemanager/releases
-[user_profile]: https://github.com/jpawlowski
-
-<!-- Optional badge definitions - uncomment if needed:
-[buymecoffee]: https://www.buymeacoffee.com/jpawlowski
-[buymecoffeebadge]: https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg?style=for-the-badge
-[discord]: https://discord.gg/Qa5fW2R
-[discord-shield]: https://img.shields.io/discord/330944238910963714.svg?style=for-the-badge
--->
+[user_profile]: https://github.com/Gamers-ElitE

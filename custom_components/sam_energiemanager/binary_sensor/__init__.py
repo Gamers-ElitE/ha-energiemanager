@@ -20,6 +20,5 @@ async def async_setup_entry(
 ) -> None:
     """Set up the binary_sensor platform."""
     async_add_entities(
-        EnergiemanagerFilterSensor(entry.runtime_data.coordinator, description)
-        for description in ENTITY_DESCRIPTIONS
+        EnergiemanagerFilterSensor(entry.runtime_data.coordinator, description) for description in ENTITY_DESCRIPTIONS
     )

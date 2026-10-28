@@ -32,6 +32,8 @@ source "$SCRIPT_DIR/.lib/ha_version.sh"
 # shellcheck source=script/.lib/integration.sh
 source "$SCRIPT_DIR/.lib/integration.sh"
 
+activate_venv
+
 # Configuration
 # In DevContainer/Codespaces: clone to $HOME/.local/ha-core (Container FS, off bind mount)
 # Local development / CI: clone to .local/ha-core (workspace)

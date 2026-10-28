@@ -12,6 +12,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[2]
 INITIALIZE = REPO_ROOT / "initialize.sh"
+pytestmark = pytest.mark.skipif(not INITIALIZE.is_file(), reason="initialize.sh removed after initialisation")
 BLUEPRINT_NAMES = re.compile(
     r"ha_integration_domain|IntegrationBlueprint|Integration [Bb]lueprint|hacs\.integration_blueprint"
     r"|jpawlowski|Julian Pawlowski"
