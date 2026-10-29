@@ -7,6 +7,7 @@ from custom_components.sam_energiemanager.const import (
     AC_BUFFER_MAX_SURPLUS_WATTS,
     AC_BUFFER_MIN_HOLD_SECONDS,
     AC_BUFFER_MIN_SURPLUS_WATTS,
+    AC_BUFFER_TEMP_OFFSET,
     BATTERY_LOCK_RELEASE_SECONDS,
     BATTERY_LOCK_THRESHOLD_WATTS,
     CHARGING_MODE_FAST,
@@ -15,6 +16,7 @@ from custom_components.sam_energiemanager.const import (
     CHARGING_MODES,
     CONF_BATTERY_DISCHARGE_LOCK_SWITCH,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_CLIMATE_ENTITY,
     CONF_ELECTRICITY_PRICE,
     CONF_EV_BLE_CONNECTED_BINARY_SENSOR,
     CONF_EV_CHARGING_SWITCH,
@@ -31,6 +33,7 @@ from custom_components.sam_energiemanager.const import (
     EV_CLOUD_HYSTERESIS_SECONDS,
     EV_MIN_CURRENT_A,
     EV_MIN_SURPLUS_WATTS,
+    EV_VOLTAGE,
     EVENT_SESSION_COMPLETED,
 )
 from homeassistant.const import (
@@ -74,6 +77,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._ev_target_amps: int = 0
         self._ac_buffer_active: bool = False
         self._ac_buffer_activated_at: datetime | None = None
+        self._ac_saved_temperature: float | None = None
         self.session_tracker = SessionTracker()
 
     def _read_float(self, conf_key: str, default: float | None = None, *, as_watts: bool = False) -> float | None:
@@ -121,6 +125,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         grid_raw = self._read_float(CONF_GRID_POWER_SENSOR, 0.0, as_watts=True) or 0.0
         battery_soc = self._read_float(CONF_BATTERY_SOC_SENSOR)
         ev_power = self._read_float(CONF_EV_POWER_SENSOR, 0.0, as_watts=True) or 0.0
+        if ev_power <= 0.0 and self._read_bool(CONF_EV_CHARGING_SWITCH):
+            ev_power = (self._read_float(CONF_EV_CURRENT_NUMBER, 0.0) or 0.0) * EV_VOLTAGE
         ev_soc = self._read_float(CONF_EV_SOC_SENSOR)
         ev_ble_connected = self._read_bool(CONF_EV_BLE_CONNECTED_BINARY_SENSOR, default=True)
 
@@ -149,7 +155,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         await self._async_sync_battery_lock()
 
         # B. Stage 3: Thermal AC Buffer (500 W - 1350 W, 20 min minimum hold)
-        self._update_ac_buffer(
+        await self._async_update_ac_buffer(
             now_utc=now_utc,
             surplus_power=surplus_power,
             battery_priority_active=battery_priority_active,
@@ -197,10 +203,11 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "charging_mode": self.charging_mode,
             "ac_buffer_enabled": self.ac_buffer_enabled,
             "ac_buffer_active": self._ac_buffer_active,
+            "ac_saved_temperature": self._ac_saved_temperature,
             "battery_discharge_lock_active": self._battery_lock_active,
         }
 
-    def _update_ac_buffer(
+    async def _async_update_ac_buffer(
         self,
         *,
         now_utc: datetime,
@@ -208,10 +215,14 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         battery_priority_active: bool,
         in_deadband: bool,
     ) -> None:
-        """Update the thermal AC buffer state with 20-minute compressor protection."""
+        """Update the thermal AC buffer state with 20-minute compressor protection and temperature shift."""
+        was_active = self._ac_buffer_active
+
         if not self.ac_buffer_enabled:
             self._ac_buffer_active = False
             self._ac_buffer_activated_at = None
+            if was_active:
+                await self._async_apply_ac_buffer_offset(activate=False)
             return
 
         if self._ac_buffer_active and self._ac_buffer_activated_at is not None:
@@ -227,9 +238,53 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             if not self._ac_buffer_active:
                 self._ac_buffer_active = True
                 self._ac_buffer_activated_at = now_utc
-        else:
+                await self._async_apply_ac_buffer_offset(activate=True)
+        elif self._ac_buffer_active:
             self._ac_buffer_active = False
             self._ac_buffer_activated_at = None
+            await self._async_apply_ac_buffer_offset(activate=False)
+
+    async def _async_apply_ac_buffer_offset(self, *, activate: bool) -> None:
+        """Shift the configured climate target temperature by ±2.5 °C or restore the previous setpoint."""
+        climate_id = self.config_entry.data.get(CONF_CLIMATE_ENTITY)
+        if not climate_id:
+            return
+        state = self.hass.states.get(climate_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return
+
+        if activate:
+            if state.state == "off":
+                return
+            current_target = state.attributes.get("temperature")
+            if current_target is None:
+                return
+            try:
+                base_temp = float(current_target)
+            except TypeError, ValueError:
+                return
+            self._ac_saved_temperature = base_temp
+            min_temp = float(state.attributes.get("min_temp", 10.0))
+            max_temp = float(state.attributes.get("max_temp", 31.0))
+            if state.state == "cool":
+                target_temp = max(min_temp, base_temp - AC_BUFFER_TEMP_OFFSET)
+            else:
+                target_temp = min(max_temp, base_temp + AC_BUFFER_TEMP_OFFSET)
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {ATTR_ENTITY_ID: climate_id, "temperature": target_temp},
+                blocking=False,
+            )
+        elif self._ac_saved_temperature is not None:
+            restore_temp = self._ac_saved_temperature
+            self._ac_saved_temperature = None
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {ATTR_ENTITY_ID: climate_id, "temperature": restore_temp},
+                blocking=False,
+            )
 
     async def _async_update_ev_charging(
         self,
@@ -332,15 +387,17 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             )
 
     async def _async_sync_ev_actuators(self) -> None:
-        """Propagate target current and charging switch state to BLE/MQTT entities."""
+        """Propagate target current and charging switch state to BLE/MQTT entities only on change."""
         number_id = self.config_entry.data.get(CONF_EV_CURRENT_NUMBER)
         if number_id and self._ev_target_amps >= EV_MIN_CURRENT_A and self.hass.states.get(number_id) is not None:
-            await self.hass.services.async_call(
-                "number",
-                "set_value",
-                {ATTR_ENTITY_ID: number_id, "value": self._ev_target_amps},
-                blocking=False,
-            )
+            current_amps = self._read_float(CONF_EV_CURRENT_NUMBER)
+            if current_amps is None or round(current_amps) != self._ev_target_amps:
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {ATTR_ENTITY_ID: number_id, "value": self._ev_target_amps},
+                    blocking=False,
+                )
 
         switch_id = self.config_entry.data.get(CONF_EV_CHARGING_SWITCH)
         if switch_id and self.hass.states.get(switch_id) is not None:

@@ -22,9 +22,9 @@ from custom_components.sam_energiemanager.coordinator.cascade import (
 )
 from homeassistant.components.number import ATTR_VALUE, DOMAIN as NUMBER_DOMAIN, SERVICE_SET_VALUE
 from homeassistant.components.select import ATTR_OPTION, DOMAIN as SELECT_DOMAIN, SERVICE_SELECT_OPTION
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_ON
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF, SERVICE_TURN_ON
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 
 
@@ -223,3 +223,43 @@ async def test_kw_power_sensor_auto_converts_to_watts(
     await hass.async_block_till_done()
 
     assert hass.states.get("sensor.energiemanager_ev_charging_power").state == "2300.0"
+
+
+async def test_ac_buffer_shifts_and_restores_climate_temperature(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Thermal AC buffer shifts climate target temp by +2.5 °C in heat mode and restores it when disabled."""
+    calls: list[ServiceCall] = []
+    hass.services.async_register("climate", "set_temperature", calls.append)
+    hass.states.async_set(
+        "climate.multisplit",
+        "heat",
+        {"temperature": 20.0, "min_temp": 10.0, "max_temp": 31.0},
+    )
+    # From initial -2000 W, a 0 W reading yields EMA = -1300 W (1300 W surplus, inside 500-1350 W window)
+    hass.states.async_set("sensor.grid_power", "0")
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: "switch.energiemanager_thermal_ac_buffer_enabled"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 22.5
+    assert init_integration.runtime_data.coordinator.data["ac_saved_temperature"] == 20.0
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: "switch.energiemanager_thermal_ac_buffer_enabled"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 2
+    assert calls[1].data["temperature"] == 20.0
+    assert init_integration.runtime_data.coordinator.data["ac_saved_temperature"] is None

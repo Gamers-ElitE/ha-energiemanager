@@ -18,7 +18,7 @@ Home Assistant Custom Integration zur intelligenten Nulleinspeisung, Prioritäte
 - **5-stufige Prioritäten-Kaskade:**
   1. **Hausgrundlast:** Automatisch vorrangig durch phasenübergreifende Saldierung des Netzzählers.
   2. **Heimspeicher (Anker Solarbank):** Konfigurierbarer Mindest-Reserve-SOC (0–100 %) via Schieberegler (z. B. Sommer 60 %, Winter 0 %).
-  3. **Thermischer Puffer (Multisplit-Klimaanlage):** Nutzt moderate Überschüsse ($500\,\text{W}$ bis $1.350\,\text{W}$) zur Verschiebung der Raum-Solltemperatur um $\pm 1{,}5\,^\circ\text{C}$ (mit 20 Minuten Kompressorschutz-Mindestlaufzeit).
+  3. **Thermischer Puffer (Multisplit-Klimaanlage):** Nutzt moderate Überschüsse ($500\,\text{W}$ bis $1.350\,\text{W}$) zur Verschiebung der Raum-Solltemperatur um $\pm 2{,}5\,^\circ\text{C}$ inkl. automatischer Wiederherstellung des vorherigen Sollwerts (mit 20 Minuten Kompressorschutz-Mindestlaufzeit).
   4. **Elektrofahrzeug (Tesla via Mobile Connector):** Dynamische 1-phasige Überschussladung ab $1.380\,\text{W}$ ($6\,\text{A}$).
   5. **Resteinspeisung ins Netz:** Verbleibender Überschuss nach Deckung der Stufen 1–4.
 - **Akku-Schutzverriegelung (Hardware-Schutz):**
@@ -86,13 +86,13 @@ $$P_{\text{surplus}} = \max(0, -P_{\text{grid\_gefiltert}})$$
 
 ### 2. Prioritäten-Kaskade
 
-| Stufe | Verbraucher            | Aktivierungsbedingung                                                          | Verhalten                                                                                                         |
-| :---: | :--------------------- | :----------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
-| **1** | **Hausgrundlast**      | Immer aktiv                                                                    | Wird physikalisch vorrangig durch den Hausanschluss saldiert.                                                     |
-| **2** | **Heimspeicher**       | `battery_soc < reserve_soc`                                                    | Überschuss fließt primär in den Speicher. E-Auto-Ladung und Klimapufferung bleiben blockiert.                     |
-| **3** | **Thermischer Puffer** | `ac_buffer_enabled` & $500\,\text{W} \le P_{\text{surplus}} < 1.350\,\text{W}$ | Verschiebung der Raum-Solltemperatur um $\pm 1{,}5\,^\circ\text{C}$. Mindestlaufzeit: 20 Min. (Kompressorschutz). |
-| **4** | **Tesla E-Auto**       | $P_{\text{surplus}} \ge 1.380\,\text{W}$ oder Stufe 2 & 3 gesättigt            | 1-phasige Ladung mit $6\,\text{A}$ bis $16\,\text{A}$ ($230\,\text{W}$-Schritte).                                 |
-| **5** | **Netzeinspeisung**    | Stufen 1–4 vollständig gesättigt                                               | Überschuss wird ins öffentliche Netz eingespeist.                                                                 |
+| Stufe | Verbraucher            | Aktivierungsbedingung                                                          | Verhalten                                                                                                                                              |
+| :---: | :--------------------- | :----------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1** | **Hausgrundlast**      | Immer aktiv                                                                    | Wird physikalisch vorrangig durch den Hausanschluss saldiert.                                                                                          |
+| **2** | **Heimspeicher**       | `battery_soc < reserve_soc`                                                    | Überschuss fließt primär in den Speicher. E-Auto-Ladung und Klimapufferung bleiben blockiert.                                                          |
+| **3** | **Thermischer Puffer** | `ac_buffer_enabled` & $500\,\text{W} \le P_{\text{surplus}} < 1.350\,\text{W}$ | Verschiebung der Raum-Solltemperatur um $\pm 2{,}5\,^\circ\text{C}$ (mit Backup & Restore des Sollwerts). Mindestlaufzeit: 20 Min. (Kompressorschutz). |
+| **4** | **Tesla E-Auto**       | $P_{\text{surplus}} \ge 1.380\,\text{W}$ oder Stufe 2 & 3 gesättigt            | 1-phasige Ladung mit $6\,\text{A}$ bis $16\,\text{A}$ ($230\,\text{W}$-Schritte).                                                                      |
+| **5** | **Netzeinspeisung**    | Stufen 1–4 vollständig gesättigt                                               | Überschuss wird ins öffentliche Netz eingespeist.                                                                                                      |
 
 ### 3. Akku-Schutzverriegelung
 
