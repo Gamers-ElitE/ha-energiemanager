@@ -2,89 +2,94 @@
   "config": {
     "step": {
       "user": {
-        "description": "If you need help with the configuration have a look at the [documentation]({documentation_url}).",
+        "title": "Set up Energiemanager",
+        "description": "Select the source entities for the zero-export filter, home battery, EV charger and AC buffer. See the [documentation]({documentation_url}) for details.",
         "data": {
-          "username": "Username",
-          "password": "Password"
+          "grid_power_sensor": "Grid power sensor",
+          "battery_soc_sensor": "Home battery SOC sensor",
+          "battery_discharge_lock_switch": "Home battery discharge lock switch",
+          "ev_power_sensor": "EV charging power sensor",
+          "ev_soc_sensor": "EV battery SOC sensor",
+          "ev_plugged_binary_sensor": "EV plugged-in status sensor",
+          "ev_ble_connected_binary_sensor": "EV BLE connection status sensor",
+          "ev_current_number": "EV charging current number entity",
+          "ev_charging_switch": "EV charging enable switch",
+          "ev_wakeup_button": "EV BLE wake-up button",
+          "climate_entity": "Multisplit AC climate entity"
         },
         "data_description": {
-          "username": "The account name you use to sign in to the device.",
-          "password": "The password for that account. It is stored encrypted and never written to the log."
+          "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
+          "battery_soc_sensor": "State of charge sensor (0-100%) of the home battery (e.g. Anker Solarbank).",
+          "battery_discharge_lock_switch": "Switch entity that locks home battery discharge while the EV is charging.",
+          "ev_power_sensor": "Current EV charging power in watts.",
+          "ev_soc_sensor": "Current state of charge (0-100%) of the EV battery.",
+          "ev_plugged_binary_sensor": "Sensor indicating whether the charging cable is connected.",
+          "ev_ble_connected_binary_sensor": "Sensor indicating local BLE-over-MQTT vehicle presence.",
+          "ev_current_number": "Number entity controlling the 1-phase charging current setpoint (6-16 A).",
+          "ev_charging_switch": "Switch entity to start or pause EV charging.",
+          "ev_wakeup_button": "Button entity triggered to wake the vehicle before starting charging.",
+          "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W)."
         }
       },
       "reconfigure": {
-        "description": "Update the credentials for this integration.",
+        "title": "Reconfigure Energiemanager",
+        "description": "Update the source entities used by the energy manager cascade.",
         "data": {
-          "username": "Username",
-          "password": "Password"
+          "grid_power_sensor": "Grid power sensor",
+          "battery_soc_sensor": "Home battery SOC sensor",
+          "battery_discharge_lock_switch": "Home battery discharge lock switch",
+          "ev_power_sensor": "EV charging power sensor",
+          "ev_soc_sensor": "EV battery SOC sensor",
+          "ev_plugged_binary_sensor": "EV plugged-in status sensor",
+          "ev_ble_connected_binary_sensor": "EV BLE connection status sensor",
+          "ev_current_number": "EV charging current number entity",
+          "ev_charging_switch": "EV charging enable switch",
+          "ev_wakeup_button": "EV BLE wake-up button",
+          "climate_entity": "Multisplit AC climate entity"
         },
         "data_description": {
-          "username": "The account name you use to sign in to the device.",
-          "password": "The password for that account."
-        }
-      },
-      "reauth_confirm": {
-        "title": "Reauthenticate integration",
-        "description": "The credentials for {username} are no longer valid. Provide updated credentials to restore access.",
-        "data": {
-          "username": "Username",
-          "password": "Password"
-        },
-        "data_description": {
-          "username": "The account name you use to sign in to the device.",
-          "password": "The current password for that account."
+          "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
+          "battery_soc_sensor": "State of charge sensor (0-100%) of the home battery (e.g. Anker Solarbank).",
+          "battery_discharge_lock_switch": "Switch entity that locks home battery discharge while the EV is charging.",
+          "ev_power_sensor": "Current EV charging power in watts.",
+          "ev_soc_sensor": "Current state of charge (0-100%) of the EV battery.",
+          "ev_plugged_binary_sensor": "Sensor indicating whether the charging cable is connected.",
+          "ev_ble_connected_binary_sensor": "Sensor indicating local BLE-over-MQTT vehicle presence.",
+          "ev_current_number": "Number entity controlling the 1-phase charging current setpoint (6-16 A).",
+          "ev_charging_switch": "Switch entity to start or pause EV charging.",
+          "ev_wakeup_button": "Button entity triggered to wake the vehicle before starting charging.",
+          "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W)."
         }
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to the server.",
-      "invalid_auth": "The username or password is wrong.",
+      "invalid_entity": "Please select a valid entity.",
       "unknown": "An unknown error occurred."
     },
     "abort": {
-      "already_configured": "This entry is already configured.",
-      "reauth_successful": "Reauthentication was successful.",
+      "already_configured": "This grid meter is already configured.",
       "reconfigure_successful": "Reconfiguration was successful."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Configure integration options",
-        "description": "Customize how this integration operates.",
+        "title": "Configure Energiemanager options",
+        "description": "Adjust the control loop interval and grid electricity price for WashData session cost calculation.",
         "data": {
-          "update_interval_hours": "Update interval (hours)"
+          "update_interval_seconds": "Calculation interval (seconds)",
+          "electricity_price_eur_per_kwh": "Grid electricity price (EUR/kWh)"
         },
         "data_description": {
-          "update_interval_hours": "How often to fetch the device state, between 0.25 and 24 hours."
+          "update_interval_seconds": "How often the cascade and EMA filter recalculate, between 5 and 60 seconds.",
+          "electricity_price_eur_per_kwh": "Price per kWh of imported grid electricity used to calculate session charging costs."
         }
       }
     }
   },
   "exceptions": {
-    "authentication_failed": {
-      "message": "Authentication failed during the data update."
-    },
-    "update_failed": {
-      "message": "Failed to fetch data from the device."
-    },
-    "switch_set_failed": {
-      "message": "Failed to change the {name} setting on the device."
-    },
-    "number_set_failed": {
-      "message": "Failed to set the target humidity on the device."
-    },
-    "reset_filter_failed": {
-      "message": "Failed to reset the filter timer on the device."
-    },
-    "fan_speed_set_failed": {
-      "message": "Failed to change the fan speed on the device."
-    },
-    "fan_state_set_failed": {
-      "message": "Failed to turn the fan on or off."
-    },
-    "invalid_fan_speed": {
-      "message": "{speed} is not a fan speed this device supports."
+    "invalid_charging_mode": {
+      "message": "{mode} is not a supported charging mode."
     },
     "entry_not_found": {
       "message": "No configuration entry of this integration matches {target}."
@@ -95,52 +100,65 @@
   },
   "entity": {
     "sensor": {
-      "filter_life": {
-        "name": "Filter life remaining"
+      "grid_power_filtered": {
+        "name": "Grid power (filtered)"
       },
-      "runtime": {
-        "name": "Total runtime"
-      }
-    },
-    "binary_sensor": {
-      "filter_replacement": {
-        "name": "Filter replacement needed"
-      }
-    },
-    "switch": {
-      "child_lock": {
-        "name": "Child lock"
+      "surplus_power": {
+        "name": "PV surplus power"
       },
-      "led_display": {
-        "name": "LED display"
-      }
-    },
-    "select": {
-      "fan_speed": {
-        "name": "Fan speed",
-        "state": {
-          "low": "Low",
-          "medium": "Medium",
-          "high": "High",
-          "auto": "Auto"
-        }
+      "ev_charging_power": {
+        "name": "EV charging power"
+      },
+      "ev_solar_power": {
+        "name": "EV solar power"
+      },
+      "ev_grid_power": {
+        "name": "EV grid power"
+      },
+      "ev_target_current": {
+        "name": "EV target current"
+      },
+      "ev_solar_lifetime_kwh": {
+        "name": "EV solar energy lifetime"
+      },
+      "ev_grid_lifetime_kwh": {
+        "name": "EV grid energy lifetime"
+      },
+      "last_session_summary": {
+        "name": "Last charging session summary"
       }
     },
     "number": {
-      "target_humidity": {
-        "name": "Target humidity"
+      "battery_reserve_soc": {
+        "name": "Battery priority reserve SOC"
+      },
+      "tesla_max_current": {
+        "name": "Tesla maximum charging current"
+      },
+      "tesla_target_soc": {
+        "name": "Tesla fast-charge target SOC"
       }
     },
-    "button": {
-      "reset_filter": {
-        "name": "Reset filter timer"
+    "select": {
+      "charging_mode": {
+        "name": "EV charging mode",
+        "state": {
+          "off": "Off",
+          "pv_surplus": "PV Surplus",
+          "fast": "Fast Charge"
+        }
+      }
+    },
+    "switch": {
+      "ac_buffer_enabled": {
+        "name": "Thermal AC buffer enabled"
       }
     }
   },
   "services": {
     "refresh_data": {
       "name": "Refresh data",
-      "description": "Fetches the current device state immediately instead of waiting for the next poll.",
+      "description": "Triggers an immediate recalculation of the energy manager cascade.",
       "fields": {
         "config_entry_id": {
           "name": "Integration entry",

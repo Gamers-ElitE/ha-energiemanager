@@ -1,7 +1,7 @@
 """
 Runtime data types for sam_energiemanager.
 
-Access pattern: entry.runtime_data.client / entry.runtime_data.coordinator
+Access pattern: entry.runtime_data.coordinator
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.loader import Integration
 
-    from .api import EnergiemanagerApiClient
     from .coordinator import EnergiemanagerDataUpdateCoordinator
 
 
@@ -22,6 +21,5 @@ type EnergiemanagerConfigEntry = ConfigEntry[EnergiemanagerData]
 class EnergiemanagerData:
     """Runtime data stored on the config entry after a successful setup."""
 
-    client: EnergiemanagerApiClient
     coordinator: EnergiemanagerDataUpdateCoordinator
     integration: Integration

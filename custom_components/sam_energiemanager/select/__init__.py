@@ -2,9 +2,9 @@
 
 from typing import TYPE_CHECKING
 
-from .fan_speed import ENTITY_DESCRIPTIONS, EnergiemanagerFanSpeedSelect
+from .charging_mode import ENTITY_DESCRIPTIONS, EnergiemanagerChargingModeSelect
 
-# Acts on the device: the coordinator does not limit outbound calls.
+# Acts on the coordinator/actuators: serialize outbound writes.
 PARALLEL_UPDATES = 1
 
 if TYPE_CHECKING:
@@ -20,5 +20,6 @@ async def async_setup_entry(
 ) -> None:
     """Set up the select platform."""
     async_add_entities(
-        EnergiemanagerFanSpeedSelect(entry.runtime_data.coordinator, description) for description in ENTITY_DESCRIPTIONS
+        EnergiemanagerChargingModeSelect(entry.runtime_data.coordinator, description)
+        for description in ENTITY_DESCRIPTIONS
     )

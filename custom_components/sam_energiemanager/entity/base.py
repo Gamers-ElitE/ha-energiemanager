@@ -2,28 +2,17 @@
 
 from typing import TYPE_CHECKING
 
-from custom_components.sam_energiemanager.api import EnergiemanagerApiClientError
-from custom_components.sam_energiemanager.const import ATTRIBUTION, DOMAIN
+from custom_components.sam_energiemanager.const import ATTRIBUTION
 from custom_components.sam_energiemanager.coordinator import EnergiemanagerDataUpdateCoordinator
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from custom_components.sam_energiemanager.api import EnergiemanagerApiClient
     from homeassistant.helpers.entity import EntityDescription
 
 
 class EnergiemanagerEntity(CoordinatorEntity[EnergiemanagerDataUpdateCoordinator]):
-    """
-    Base entity providing device info, unique ID and attribution.
-
-    The unique ID is `{entry_id}_{key}`, the documented identifier of last resort.
-    A real integration switches to the device's serial, MAC or account ID before its
-    first release, because changing it afterwards needs a registry migration.
-    """
+    """Base entity providing device info, unique ID and attribution."""
 
     _attr_attribution = ATTRIBUTION
     _attr_has_entity_name = True
@@ -46,36 +35,7 @@ class EnergiemanagerEntity(CoordinatorEntity[EnergiemanagerDataUpdateCoordinator
             },
             name=coordinator.config_entry.title,
             manufacturer="Energiemanager",
-            model=coordinator.data["model"],
-            serial_number=coordinator.data["serial_number"],
-            sw_version=coordinator.data["sw_version"],
+            model="PV Cascade & EV Controller",
+            serial_number=coordinator.config_entry.entry_id,
+            sw_version="0.1.0",
         )
-
-    async def _async_write(
-        self,
-        call: Callable[[EnergiemanagerApiClient], Awaitable[None]],
-        translation_key: str,
-        **placeholders: str,
-    ) -> None:
-        """
-        Run a write against the device, then refresh the coordinator.
-
-        Args:
-            call: Receives the API client and performs the write.
-            translation_key: Key of the exception message used when the write fails.
-            **placeholders: Values for that message's placeholders.
-
-        Raises:
-            HomeAssistantError: If the device cannot be reached or rejects the write.
-
-        """
-        try:
-            await call(self.coordinator.config_entry.runtime_data.client)
-        except EnergiemanagerApiClientError as exception:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key=translation_key,
-                translation_placeholders=placeholders or None,
-            ) from exception
-
-        await self.coordinator.async_request_refresh()

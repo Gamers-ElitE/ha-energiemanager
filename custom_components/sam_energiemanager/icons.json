@@ -1,32 +1,60 @@
 {
   "entity": {
     "sensor": {
-      "filter_life": {
-        "default": "mdi:air-filter"
+      "grid_power_filtered": {
+        "default": "mdi:transmission-tower"
+      },
+      "surplus_power": {
+        "default": "mdi:solar-power"
+      },
+      "ev_charging_power": {
+        "default": "mdi:ev-station"
+      },
+      "ev_solar_power": {
+        "default": "mdi:weather-sunny"
+      },
+      "ev_grid_power": {
+        "default": "mdi:transmission-tower-Import"
+      },
+      "ev_target_current": {
+        "default": "mdi:current-ac"
+      },
+      "ev_solar_lifetime_kwh": {
+        "default": "mdi:solar-panel-large"
+      },
+      "ev_grid_lifetime_kwh": {
+        "default": "mdi:meter-electric"
+      },
+      "last_session_summary": {
+        "default": "mdi:car-electric"
       }
     },
-    "switch": {
-      "child_lock": {
-        "default": "mdi:lock",
-        "state": {
-          "off": "mdi:lock-open-variant"
-        }
+    "number": {
+      "battery_reserve_soc": {
+        "default": "mdi:home-battery"
       },
-      "led_display": {
-        "default": "mdi:led-on",
-        "state": {
-          "off": "mdi:led-off"
-        }
+      "tesla_max_current": {
+        "default": "mdi:current-ac"
+      },
+      "tesla_target_soc": {
+        "default": "mdi:battery-charging-80"
       }
     },
     "select": {
-      "fan_speed": {
-        "default": "mdi:fan",
+      "charging_mode": {
+        "default": "mdi:car-electric-outline",
         "state": {
-          "low": "mdi:fan-speed-1",
-          "medium": "mdi:fan-speed-2",
-          "high": "mdi:fan-speed-3",
-          "auto": "mdi:fan-auto"
+          "off": "mdi:power-plug-off",
+          "pv_surplus": "mdi:weather-sunny",
+          "fast": "mdi:flash"
+        }
+      }
+    },
+    "switch": {
+      "ac_buffer_enabled": {
+        "default": "mdi:air-conditioner",
+        "state": {
+          "off": "mdi:hvac-off"
         }
       }
     }

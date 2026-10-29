@@ -1,20 +1,14 @@
-"""Config flow for sam_energiemanager — user setup, reconfigure and reauth."""
+"""Config flow for sam_energiemanager — user setup and reconfigure."""
 
 from typing import Any
 
-from custom_components.sam_energiemanager.api import (
-    EnergiemanagerApiClientAuthenticationError,
-    EnergiemanagerApiClientCommunicationError,
-)
-from custom_components.sam_energiemanager.const import DOMAIN, LOGGER
+from custom_components.sam_energiemanager.const import CONF_GRID_POWER_SENSOR, DOMAIN
 from homeassistant import config_entries
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.loader import async_get_loaded_integration
 from homeassistant.util import slugify
 
 from .options_flow import EnergiemanagerOptionsFlow
-from .schemas import get_credentials_schema, get_user_schema
-from .validators import validate_credentials
+from .schemas import get_user_schema
 
 
 class EnergiemanagerConfigFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -49,15 +43,15 @@ class EnergiemanagerConfigFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            errors = await self._async_validate(user_input)
-            if not errors:
-                # The username is the unique ID of last resort. A real integration
-                # uses a serial number, MAC or account ID instead.
-                await self.async_set_unique_id(slugify(user_input[CONF_USERNAME]))
+            grid_sensor = str(user_input.get(CONF_GRID_POWER_SENSOR, "")).strip()
+            if not grid_sensor or "." not in grid_sensor:
+                errors[CONF_GRID_POWER_SENSOR] = "invalid_entity"
+            else:
+                await self.async_set_unique_id(slugify(grid_sensor))
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title=user_input[CONF_USERNAME],
+                    title="Energiemanager",
                     data=user_input,
                 )
 
@@ -87,83 +81,20 @@ class EnergiemanagerConfigFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            errors = await self._async_validate(user_input)
-            if not errors:
+            grid_sensor = str(user_input.get(CONF_GRID_POWER_SENSOR, "")).strip()
+            if not grid_sensor or "." not in grid_sensor:
+                errors[CONF_GRID_POWER_SENSOR] = "invalid_entity"
+            else:
                 return self.async_update_reload_and_abort(entry, data_updates=user_input)
 
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(
-                get_credentials_schema(entry.data.get(CONF_USERNAME, "")),
+                get_user_schema(),
                 entry.data,
             ),
             errors=errors,
         )
-
-    async def async_step_reauth(
-        self,
-        entry_data: dict[str, Any],
-    ) -> config_entries.ConfigFlowResult:
-        """
-        Start reauthentication after the coordinator reported invalid credentials.
-
-        Returns:
-            The result of the reauth_confirm step.
-
-        """
-        return await self.async_step_reauth_confirm()
-
-    async def async_step_reauth_confirm(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> config_entries.ConfigFlowResult:
-        """
-        Collect and verify replacement credentials.
-
-        Returns:
-            The form, or the abort that follows the entry update.
-
-        """
-        entry = self._get_reauth_entry()
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            errors = await self._async_validate(user_input)
-            if not errors:
-                return self.async_update_reload_and_abort(entry, data_updates=user_input)
-
-        return self.async_show_form(
-            step_id="reauth_confirm",
-            data_schema=get_credentials_schema(entry.data.get(CONF_USERNAME, "")),
-            errors=errors,
-            description_placeholders={
-                "username": entry.data.get(CONF_USERNAME, ""),
-            },
-        )
-
-    async def _async_validate(self, user_input: dict[str, Any]) -> dict[str, str]:
-        """
-        Test the submitted credentials.
-
-        Returns:
-            An empty dict when they work, otherwise the errors for the form.
-
-        """
-        try:
-            await validate_credentials(
-                self.hass,
-                username=user_input[CONF_USERNAME],
-                password=user_input[CONF_PASSWORD],
-            )
-        except EnergiemanagerApiClientAuthenticationError:
-            return {"base": "invalid_auth"}
-        except EnergiemanagerApiClientCommunicationError:
-            return {"base": "cannot_connect"}
-        except Exception:  # noqa: BLE001 - Anything unexpected still has to reach the form.
-            LOGGER.exception("Unexpected exception")
-            return {"base": "unknown"}
-
-        return {}
 
 
 __all__ = ["EnergiemanagerConfigFlowHandler"]

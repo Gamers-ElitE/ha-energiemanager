@@ -2,9 +2,9 @@
 
 from typing import TYPE_CHECKING
 
-from .example_switch import ENTITY_DESCRIPTIONS, EnergiemanagerSwitch
+from .ac_buffer import ENTITY_DESCRIPTIONS, EnergiemanagerSwitch
 
-# Acts on the device: the coordinator does not limit outbound calls.
+# Acts on the coordinator/actuators: serialize outbound writes.
 PARALLEL_UPDATES = 1
 
 if TYPE_CHECKING:

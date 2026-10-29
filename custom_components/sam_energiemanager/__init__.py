@@ -8,13 +8,11 @@ https://github.com/Gamers-ElitE/ha-energiemanager
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.const import Platform
 import homeassistant.helpers.config_validation as cv
 from homeassistant.loader import async_get_loaded_integration
 
-from .api import EnergiemanagerApiClient
-from .const import CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN, LOGGER
+from .const import CONF_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS, DOMAIN, LOGGER
 from .coordinator import EnergiemanagerDataUpdateCoordinator
 from .data import EnergiemanagerData
 from .service_actions import async_setup_services
@@ -25,9 +23,6 @@ if TYPE_CHECKING:
     from .data import EnergiemanagerConfigEntry
 
 PLATFORMS: list[Platform] = [
-    Platform.BINARY_SENSOR,
-    Platform.BUTTON,
-    Platform.FAN,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
@@ -60,24 +55,17 @@ async def async_setup_entry(
         True once the coordinator has data and every platform is forwarded.
 
     """
-    client = EnergiemanagerApiClient(
-        username=entry.data[CONF_USERNAME],
-        password=entry.data[CONF_PASSWORD],
-        session=async_get_clientsession(hass),
-    )
-
-    interval_hours = float(entry.options.get(CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS))
+    interval_seconds = int(entry.options.get(CONF_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS))
     coordinator = EnergiemanagerDataUpdateCoordinator(
         hass=hass,
         logger=LOGGER,
         name=DOMAIN,
         config_entry=entry,
-        update_interval=timedelta(hours=interval_hours),
+        update_interval=timedelta(seconds=interval_seconds),
         always_update=False,
     )
 
     entry.runtime_data = EnergiemanagerData(
-        client=client,
         integration=async_get_loaded_integration(hass, entry.domain),
         coordinator=coordinator,
     )
