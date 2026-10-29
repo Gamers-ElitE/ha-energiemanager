@@ -7,6 +7,7 @@ import probatio
 
 from custom_components.sam_energiemanager.const import (
     CONF_BATTERY_DISCHARGE_LOCK_SWITCH,
+    CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_CLIMATE_ENTITY,
     CONF_EV_BLE_CONNECTED_BINARY_SENSOR,
@@ -17,11 +18,16 @@ from custom_components.sam_energiemanager.const import (
     CONF_EV_SOC_SENSOR,
     CONF_EV_WAKEUP_BUTTON,
     CONF_GRID_POWER_SENSOR,
+    CONF_OUTDOOR_TEMP_SENSOR,
+    CONF_PV_POWER_SENSOR,
 )
 from homeassistant.helpers import selector
 
 _POWER_SENSOR_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="sensor"),
+)
+_TEMP_SENSOR_SELECTOR = selector.EntitySelector(
+    selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
 )
 _BATTERY_SENSOR_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="sensor", device_class="battery"),
@@ -30,7 +36,7 @@ _SWITCH_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain=["switch", "input_boolean", "select"]),
 )
 _BINARY_OR_SENSOR_SELECTOR = selector.EntitySelector(
-    selector.EntitySelectorConfig(domain=["binary_sensor", "sensor"]),
+    selector.EntitySelectorConfig(domain=["binary_sensor", "sensor", "input_boolean", "device_tracker"]),
 )
 _NUMBER_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="number"),
@@ -53,6 +59,9 @@ _OPTIONAL_ENTITY_SELECTORS: tuple[tuple[str, selector.EntitySelector], ...] = (
     (CONF_EV_CHARGING_SWITCH, _SWITCH_SELECTOR),
     (CONF_EV_WAKEUP_BUTTON, _BUTTON_SELECTOR),
     (CONF_CLIMATE_ENTITY, _CLIMATE_SELECTOR),
+    (CONF_OUTDOOR_TEMP_SENSOR, _TEMP_SENSOR_SELECTOR),
+    (CONF_PV_POWER_SENSOR, _POWER_SENSOR_SELECTOR),
+    (CONF_BATTERY_POWER_SENSOR, _POWER_SENSOR_SELECTOR),
 )
 
 

@@ -1,4 +1,4 @@
-"""Tests for the Energiemanager entities, cascade logic, and WashData session tracking."""
+"""Tests for the Energiemanager entities, cascade logic, and charging session tracking."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -20,6 +20,7 @@ from custom_components.sam_energiemanager.coordinator.cascade import (
     is_within_deadband,
     split_ev_power,
 )
+from custom_components.sam_energiemanager.utils.dashboard import DASHBOARD_URL_PATH, build_dashboard_config
 from homeassistant.components.number import ATTR_VALUE, DOMAIN as NUMBER_DOMAIN, SERVICE_SET_VALUE
 from homeassistant.components.select import ATTR_OPTION, DOMAIN as SELECT_DOMAIN, SERVICE_SELECT_OPTION
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF, SERVICE_TURN_ON
@@ -123,8 +124,8 @@ async def test_config_flow_user_and_reconfigure(hass: HomeAssistant) -> None:
     assert result2["data"][CONF_GRID_POWER_SENSOR] == "sensor.main_grid_power"
 
 
-def test_cascade_math_and_washdata_session_tracker() -> None:
-    """Verify EMA, deadband, 1-phase current calculation, and WashData session completion."""
+def test_cascade_math_and_session_tracker() -> None:
+    """Verify EMA, deadband, 1-phase current calculation, and charging session completion."""
     ema1 = compute_ema(-1000.0, None)
     assert ema1 == -1000.0
     ema2 = compute_ema(-2000.0, ema1)
@@ -135,7 +136,8 @@ def test_cascade_math_and_washdata_session_tracker() -> None:
     assert compute_surplus_watts(-1500.0) == 1500.0
     assert compute_surplus_watts(200.0) == 0.0
 
-    # 1-phase 230 V: (1380 + 0) / 230 = 6 A; (4000 + 0) / 230 = 17 -> clamped to 13 A
+    # 1-phase 230 V: (690 + 0) / 230 = 3 A; (1380 + 0) / 230 = 6 A; (4000 + 0) / 230 = 17 -> clamped to 13 A
+    assert compute_ev_target_current(690.0, 0.0, 13) == 3
     assert compute_ev_target_current(1380.0, 0.0, 13) == 6
     assert compute_ev_target_current(4000.0, 0.0, 13) == 13
 
@@ -263,3 +265,121 @@ async def test_ac_buffer_shifts_and_restores_climate_temperature(
     assert len(calls) == 2
     assert calls[1].data["temperature"] == 20.0
     assert init_integration.runtime_data.coordinator.data["ac_saved_temperature"] is None
+
+
+async def test_threshold_numbers_status_binary_sensors_and_dashboard(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Verify threshold number entities, status binary sensors, and built-in dashboard generation."""
+    assert hass.states.get("number.energiemanager_ema_smoothing_factor").state == "0.35"
+    assert hass.states.get("number.energiemanager_symmetric_deadband").state == "60.0"
+    assert hass.states.get("number.energiemanager_ac_buffer_temperature_offset").state == "2.5"
+    assert hass.states.get("binary_sensor.energiemanager_battery_discharge_lock_active").state == "off"
+    assert hass.states.get("binary_sensor.energiemanager_thermal_ac_buffer_active").state == "off"
+    assert hass.states.get("binary_sensor.energiemanager_ev_charging_session_active").state == "off"
+
+    await hass.services.async_call(
+        NUMBER_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_ENTITY_ID: "number.energiemanager_symmetric_deadband", ATTR_VALUE: 100},
+        blocking=True,
+    )
+    assert hass.states.get("number.energiemanager_symmetric_deadband").state == "100.0"
+
+    dashboard_cfg = build_dashboard_config(hass, init_integration)
+    assert dashboard_cfg["title"] == "Energiemanager"
+    assert len(dashboard_cfg["views"]) == 3
+    assert DASHBOARD_URL_PATH == "sam-energiemanager"
+
+
+async def test_ev_unplugged_or_away_blocks_charging(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """When the Tesla is unplugged or away (BLE disconnected), EV charging is blocked."""
+    hass.states.async_set("binary_sensor.tesla_plugged", "off")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.energiemanager_ev_target_current").state == "0"
+
+
+async def test_ac_auto_heat_starts_when_off_and_cold_outside_and_restores_off(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """When climate is off and outdoor temp <= threshold, auto-heat turns it on in heat mode and restores off."""
+    hvac_calls: list[ServiceCall] = []
+    temp_calls: list[ServiceCall] = []
+    hass.services.async_register("climate", "set_hvac_mode", hvac_calls.append)
+    hass.services.async_register("climate", "set_temperature", temp_calls.append)
+
+    hass.states.async_set(
+        "climate.multisplit",
+        "off",
+        {"temperature": 21.0, "min_temp": 10.0, "max_temp": 31.0},
+    )
+    hass.states.async_set("sensor.multisplit_outdoor", "8.0")
+    hass.states.async_set("sensor.grid_power", "0")
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: "switch.energiemanager_ac_auto_start_heating_when_off"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: "switch.energiemanager_thermal_ac_buffer_enabled"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert len(hvac_calls) == 1
+    assert hvac_calls[0].data["hvac_mode"] == "heat"
+    assert len(temp_calls) == 1
+    assert temp_calls[0].data["temperature"] == 23.5
+    assert init_integration.runtime_data.coordinator.data["ac_saved_hvac_mode"] == "off"
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: "switch.energiemanager_thermal_ac_buffer_enabled"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert len(hvac_calls) == 2
+    assert hvac_calls[1].data["hvac_mode"] == "off"
+    assert init_integration.runtime_data.coordinator.data["ac_saved_hvac_mode"] is None
+
+
+async def test_home_power_calculation_synchronizes_fast_grid_with_10s_inverter_and_battery(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Rapid Tasmota updates are averaged over the 10s window and combined with inverter and Anker battery power."""
+    hass.states.async_set("sensor.inverter_wirkleistung", "2800")
+    hass.states.async_set("sensor.anker_solix_solarbank_max_ac_345_batterieladeleistung", "1600")
+    hass.states.async_set("sensor.anker_solix_solarbank_max_ac_345_batterieentladeleistung", "0")
+
+    # Simulate multiple rapid Tasmota grid updates within the 10-second window (-100 W, +100 W, 0 W -> mean 0 W)
+    hass.states.async_set("sensor.grid_power", "-100")
+    await hass.async_block_till_done()
+    hass.states.async_set("sensor.grid_power", "100")
+    await hass.async_block_till_done()
+    hass.states.async_set("sensor.grid_power", "0")
+    await hass.async_block_till_done()
+
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    home_state = hass.states.get("sensor.energiemanager_home_power_consumption")
+    assert home_state is not None
+    # Initial home_ema was 0.0; new raw = 2800 + 0 - 1600 = 1200 W -> EMA(0.35) = 420.0 W
+    assert float(home_state.state) == pytest.approx(420.0)
+    assert home_state.attributes["pv_power_watts"] == 2800.0
+    assert home_state.attributes["battery_power_watts"] == -1600.0
+    assert home_state.attributes["home_power_total_watts"] == 1200.0

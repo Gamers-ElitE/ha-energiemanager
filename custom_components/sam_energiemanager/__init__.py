@@ -16,6 +16,7 @@ from .const import CONF_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS
 from .coordinator import EnergiemanagerDataUpdateCoordinator
 from .data import EnergiemanagerData
 from .service_actions import async_setup_services
+from .utils import async_register_dashboard, async_unregister_dashboard
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from .data import EnergiemanagerConfigEntry
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
@@ -71,8 +73,10 @@ async def async_setup_entry(
     )
 
     await coordinator.async_config_entry_first_refresh()
+    entry.async_on_unload(coordinator.async_setup_listeners())
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await async_register_dashboard(hass, entry)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     return True
@@ -89,7 +93,10 @@ async def async_unload_entry(
         True if every platform unloaded cleanly.
 
     """
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        async_unregister_dashboard(hass)
+    return unloaded
 
 
 async def async_reload_entry(

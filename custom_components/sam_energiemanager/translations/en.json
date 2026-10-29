@@ -15,7 +15,10 @@
           "ev_current_number": "EV charging current number entity",
           "ev_charging_switch": "EV charging enable switch",
           "ev_wakeup_button": "EV BLE wake-up button",
-          "climate_entity": "Multisplit AC climate entity"
+          "climate_entity": "Multisplit AC climate entity",
+          "outdoor_temp_sensor": "Outdoor temperature sensor",
+          "pv_power_sensor": "PV inverter power sensor",
+          "battery_power_sensor": "Home battery net power sensor"
         },
         "data_description": {
           "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
@@ -28,7 +31,10 @@
           "ev_current_number": "Number entity controlling the 1-phase charging current setpoint (6-16 A).",
           "ev_charging_switch": "Switch entity to start or pause EV charging.",
           "ev_wakeup_button": "Button entity triggered to wake the vehicle before starting charging.",
-          "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W)."
+          "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W).",
+          "outdoor_temp_sensor": "Optional outdoor temperature sensor used to decide when to auto-start heating.",
+          "pv_power_sensor": "Optional PV inverter AC power sensor in watts (auto-discovers sensor.inverter_wirkleistung if omitted).",
+          "battery_power_sensor": "Optional signed home battery power sensor in watts (negative = charging, positive = discharging)."
         }
       },
       "reconfigure": {
@@ -45,7 +51,10 @@
           "ev_current_number": "EV charging current number entity",
           "ev_charging_switch": "EV charging enable switch",
           "ev_wakeup_button": "EV BLE wake-up button",
-          "climate_entity": "Multisplit AC climate entity"
+          "climate_entity": "Multisplit AC climate entity",
+          "outdoor_temp_sensor": "Outdoor temperature sensor",
+          "pv_power_sensor": "PV inverter power sensor",
+          "battery_power_sensor": "Home battery net power sensor"
         },
         "data_description": {
           "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
@@ -58,7 +67,10 @@
           "ev_current_number": "Number entity controlling the 1-phase charging current setpoint (6-16 A).",
           "ev_charging_switch": "Switch entity to start or pause EV charging.",
           "ev_wakeup_button": "Button entity triggered to wake the vehicle before starting charging.",
-          "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W)."
+          "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W).",
+          "outdoor_temp_sensor": "Optional outdoor temperature sensor used to decide when to auto-start heating.",
+          "pv_power_sensor": "Optional PV inverter AC power sensor in watts (auto-discovers sensor.inverter_wirkleistung if omitted).",
+          "battery_power_sensor": "Optional signed home battery power sensor in watts (negative = charging, positive = discharging)."
         }
       }
     },
@@ -75,7 +87,7 @@
     "step": {
       "init": {
         "title": "Configure Energiemanager options",
-        "description": "Adjust the control loop interval and grid electricity price for WashData session cost calculation.",
+        "description": "Adjust the control loop interval and grid electricity price for EV charging session cost calculation.",
         "data": {
           "update_interval_seconds": "Calculation interval (seconds)",
           "electricity_price_eur_per_kwh": "Grid electricity price (EUR/kWh)"
@@ -99,12 +111,26 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "battery_discharge_lock_active": {
+        "name": "Battery discharge lock active"
+      },
+      "ac_buffer_active": {
+        "name": "Thermal AC buffer active"
+      },
+      "ev_session_active": {
+        "name": "EV charging session active"
+      }
+    },
     "sensor": {
       "grid_power_filtered": {
         "name": "Grid power (filtered)"
       },
       "surplus_power": {
         "name": "PV surplus power"
+      },
+      "home_power_watts": {
+        "name": "Home power consumption"
       },
       "ev_charging_power": {
         "name": "EV charging power"
@@ -137,6 +163,42 @@
       },
       "tesla_target_soc": {
         "name": "Tesla fast-charge target SOC"
+      },
+      "ema_alpha": {
+        "name": "EMA smoothing factor"
+      },
+      "deadband_watts": {
+        "name": "Symmetric deadband"
+      },
+      "battery_lock_threshold_watts": {
+        "name": "Battery lock power threshold"
+      },
+      "battery_lock_release_seconds": {
+        "name": "Battery lock release delay"
+      },
+      "ac_buffer_min_surplus_watts": {
+        "name": "AC buffer minimum surplus"
+      },
+      "ac_buffer_max_surplus_watts": {
+        "name": "AC buffer maximum surplus"
+      },
+      "ac_buffer_temp_offset": {
+        "name": "AC buffer temperature offset"
+      },
+      "ac_buffer_min_hold_minutes": {
+        "name": "AC buffer minimum hold time"
+      },
+      "ac_auto_heat_max_outdoor_temp": {
+        "name": "AC auto-heat maximum outdoor temperature"
+      },
+      "ev_min_surplus_watts": {
+        "name": "EV minimum surplus power"
+      },
+      "ev_cloud_hysteresis_seconds": {
+        "name": "EV cloud hysteresis delay"
+      },
+      "electricity_price": {
+        "name": "Electricity tariff price"
       }
     },
     "select": {
@@ -152,6 +214,9 @@
     "switch": {
       "ac_buffer_enabled": {
         "name": "Thermal AC buffer enabled"
+      },
+      "ac_auto_heat_enabled": {
+        "name": "AC auto-start heating when off"
       }
     }
   },

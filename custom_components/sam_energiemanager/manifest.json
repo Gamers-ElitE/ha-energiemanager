@@ -1,6 +1,11 @@
 {
   "domain": "sam_energiemanager",
   "name": "Energiemanager",
+  "after_dependencies": [
+    "frontend",
+    "http",
+    "lovelace"
+  ],
   "codeowners": [
     "@Gamers-ElitE"
   ],

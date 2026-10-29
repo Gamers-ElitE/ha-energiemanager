@@ -85,7 +85,7 @@ def split_ev_power(ev_watts: float, grid_raw_watts: float) -> tuple[float, float
 
 @dataclass
 class SessionTracker:
-    """WashData-style session tracker and lifetime energy accumulator."""
+    """EV charging session tracker and lifetime energy accumulator."""
 
     solar_lifetime_kwh: float = 0.0
     grid_lifetime_kwh: float = 0.0

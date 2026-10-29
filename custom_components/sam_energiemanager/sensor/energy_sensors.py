@@ -1,4 +1,4 @@
-"""Energy, power, current and WashData session sensors for sam_energiemanager."""
+"""Energy, power, current, and charging session sensors for sam_energiemanager."""
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower
@@ -23,6 +23,21 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=1,
         value_fn=lambda data: data.get("surplus_power"),
+    ),
+    EnergiemanagerSensorEntityDescription(
+        key="home_power_watts",
+        translation_key="home_power_watts",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        suggested_display_precision=1,
+        value_fn=lambda data: data.get("home_power_watts"),
+        attr_fn=lambda data: {
+            "pv_power_watts": data.get("pv_power_watts"),
+            "battery_power_watts": data.get("battery_power_watts"),
+            "home_power_total_watts": data.get("home_power_total_watts"),
+            "grid_10s_mean_watts": data.get("grid_10s_mean_watts"),
+        },
     ),
     EnergiemanagerSensorEntityDescription(
         key="ev_charging_power",

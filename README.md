@@ -6,7 +6,7 @@
 [![hacs][hacsbadge]][hacs]
 ![Project Maintenance][maintenance-shield]
 
-Home Assistant Custom Integration zur intelligenten Nulleinspeisung, Prioritäten-Kaskadierung und dynamischen 1-phasigen PV-Überschussladung (Tesla via lokalem BLE-über-MQTT) inklusive Hardware-Schutzverriegelung für Heimspeicher (Anker Solarbank) und transparentem Session-Tracking nach dem WashData-Prinzip.
+Home Assistant Custom Integration zur intelligenten Nulleinspeisung, Prioritäten-Kaskadierung und dynamischen 1-phasigen PV-Überschussladung (Tesla via lokalem BLE-über-MQTT) inklusive Hardware-Schutzverriegelung für Heimspeicher (Anker Solarbank) und transparentem Ladesitzungs-Tracking.
 
 ---
 
@@ -29,7 +29,7 @@ Home Assistant Custom Integration zur intelligenten Nulleinspeisung, Prioritäte
   - Einstellbereich von $6\,\text{A}$ ($1.380\,\text{W}$) bis $16\,\text{A}$ ($3.680\,\text{W}$) in präzisen $230\,\text{W}$-Schritten ($1\,\text{A}$).
   - Modi: `Aus`, `PV-Überschuss` (inkl. 180 s Wolkenpuffer bei 6 A), `Schnellladen` (maximale Ladeleistung bis Ziel-SOC).
   - Lokale Steuerung: Automatische Fahrzeug-Präsenzerkennung und Wake-up-Trigger ohne Cloud-Latenz.
-- **Session-Tracking nach dem WashData-Prinzip:**
+- **Ladesitzungs-Tracking & Energiebilanz:**
   - Automatische Lade-Sitzungserkennung (Steckerstatus & Ladeleistung $> 200\,\text{W}$).
   - Echtzeit-Zerlegung des Ladestroms in Solar- und Netzanteil.
   - Native Energiezähler (`state_class: total_increasing`) zur direkten Integration in das Home Assistant Energy Dashboard:
@@ -112,7 +112,7 @@ $$I_{\text{target}} = \text{clamp}\left(\left\lfloor \frac{P_{\text{surplus}} + 
 
 ---
 
-## 📊 WashData-Prinzip & Session-Tracking
+## 📊 Ladebilanz & Session-Tracking
 
 Bei jedem Rechenzyklus (z. B. alle 5 bis 10 Sekunden) wird die aktuelle Ladeleistung des Fahrzeugs anhand des realen Netzflusses zerlegt:
 
@@ -195,7 +195,7 @@ entities:
     name: Klima-Pufferung aktivieren
 ```
 
-### 2. Status & WashData-Statistik
+### 2. Status & Ladebilanz
 
 ```yaml
 type: vertical-stack
@@ -210,7 +210,7 @@ cards:
       - entity: sensor.sam_energiemanager_ev_charging_power
         name: Ladeleistung E-Auto
   - type: entities
-    title: Letzte Ladesitzung (WashData)
+    title: Letzte Ladesitzung
     entities:
       - entity: sensor.sam_energiemanager_last_session_summary
         name: Zusammenfassung
