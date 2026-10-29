@@ -258,6 +258,20 @@ const _CSS = `
   color: var(--secondary-text-color);
   background: var(--secondary-background-color);
 }
+.em-select {
+  background: var(--card-background-color, #1e222b);
+  color: var(--primary-text-color);
+  border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.25));
+  border-radius: var(--em-radius-md);
+  padding: 6px 10px;
+  font-size: 0.82em;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.em-select:focus {
+  border-color: var(--primary-color, #0ea5e9);
+}
 
 /* Live Energy Flow Diagram */
 .em-flow-wrap {
@@ -304,6 +318,10 @@ const _CSS = `
 .em-flow-node.active-ac {
   border-color: var(--em-ac);
   box-shadow: 0 0 16px rgba(6, 182, 212, 0.12);
+}
+.em-flow-node.active-dhw {
+  border-color: #f97316;
+  box-shadow: 0 0 16px rgba(249, 115, 22, 0.14);
 }
 .em-flow-node.active-ev {
   border-color: var(--em-ev);
@@ -353,8 +371,8 @@ const _CSS = `
 }
 .em-flow-consumers {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
   width: 100%;
 }
 .em-node-head {
@@ -711,11 +729,14 @@ const _CSS = `
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
+@media (max-width: 1020px) {
+  .em-flow-consumers { grid-template-columns: repeat(2, 1fr); }
+  .em-flow-svg { display: none; }
+  .em-flow-hub { margin: 10px 0; }
+}
 @media (max-width: 860px) {
   .em-flow-consumers { grid-template-columns: 1fr; }
   .em-flow-sources { grid-template-columns: 1fr; gap: 12px; }
-  .em-flow-svg { display: none; }
-  .em-flow-hub { margin: 10px 0; }
 }
 @media (max-width: 680px) {
   .em-header { padding: 12px 14px; }
@@ -824,7 +845,53 @@ const _THRESHOLD_SECTIONS = [
     ],
   },
   {
-    title: '3. Klimaanlage als Wärmepuffer',
+    title: '3. Warmwasser-Wärmepumpe (LG)',
+    intro: 'Heizt tagsüber (10–18 Uhr) bei PV-Überschuss auf Zieltemperatur und schützt im Winter vor Auskühlung.',
+    fields: [
+      {
+        key: 'dhw_min_surplus_watts',
+        label: 'Start ab PV-Überschuss',
+        unit: 'W',
+        min: 200,
+        max: 1500,
+        step: 50,
+        dec: 0,
+        hint: 'Ab diesem Überschuss schaltet die Warmwasser-WP in den Modus „heat_pump“ (Standard: 500 W).',
+      },
+      {
+        key: 'dhw_target_temp',
+        label: 'PV-Zieltemperatur',
+        unit: '°C',
+        min: 45,
+        max: 60,
+        step: 1,
+        dec: 0,
+        hint: 'Erreicht das Wasser diese Zieltemperatur, schaltet die Wärmepumpe ab (Standard: 53 °C).',
+      },
+      {
+        key: 'dhw_stop_temp',
+        label: 'Abschaltschwelle bei Netzbezug',
+        unit: '°C',
+        min: 40,
+        max: 58,
+        step: 1,
+        dec: 0,
+        hint: 'Oberhalb dieser Wassertemperatur wird bei > 200 W Netzbezug wieder abgeschaltet (Standard: 51 °C).',
+      },
+      {
+        key: 'dhw_min_temp',
+        label: 'Mindesttemperatur (Winter-Schutz)',
+        unit: '°C',
+        min: 35,
+        max: 50,
+        step: 1,
+        dec: 0,
+        hint: 'Fällt das Wasser unter diesen Wert, wird ab dem Tages-PV-Peak zwangsweise nachgeheizt (Standard: 42 °C).',
+      },
+    ],
+  },
+  {
+    title: '4. Klimaanlage als Wärmepuffer',
     intro: 'Nutzt mittleren Überschuss zum Vorheizen oder Vorkühlen der Räume.',
     fields: [
       {
@@ -880,7 +947,7 @@ const _THRESHOLD_SECTIONS = [
     ],
   },
   {
-    title: '4. Tesla-Ladesteuerung & Strompreis',
+    title: '5. Tesla-Ladesteuerung & Strompreis',
     intro: 'Steuert den Ladestrom von 3 bis 16 A (je 230 W) und stoppt bei längerem Netzbezug.',
     fields: [
       {
@@ -1049,17 +1116,24 @@ class SamEnergiemanagerPanel extends HTMLElement {
     // Fallback lookup by known suffix patterns if hass.entities is unavailable
     const fallbacks = {
       charging_mode: ['select.energiemanager_ev_charging_mode', 'select.sam_energiemanager_charging_mode'],
+      priority_order: ['select.energiemanager_surplus_consumer_priority_order', 'select.energiemanager_priority_order', 'select.sam_energiemanager_priority_order'],
       battery_reserve_soc: ['number.energiemanager_battery_priority_reserve_soc', 'number.sam_energiemanager_battery_reserve_soc'],
       tesla_max_current: ['number.energiemanager_tesla_maximum_charging_current', 'number.sam_energiemanager_tesla_max_current'],
       tesla_target_soc: ['number.energiemanager_tesla_fast_charge_target_soc', 'number.sam_energiemanager_tesla_target_soc'],
       ac_buffer_enabled: ['switch.energiemanager_thermal_ac_buffer_enabled', 'switch.sam_energiemanager_ac_buffer_enabled'],
       ac_auto_heat_enabled: ['switch.energiemanager_ac_auto_start_heating_when_off', 'switch.sam_energiemanager_ac_auto_heat_enabled'],
+      dhw_enabled: ['switch.energiemanager_hot_water_heat_pump_auto_control', 'switch.sam_energiemanager_dhw_enabled'],
       battery_discharge_lock_active: ['binary_sensor.energiemanager_battery_discharge_lock_active'],
       ac_buffer_active: ['binary_sensor.energiemanager_thermal_ac_buffer_active'],
+      dhw_active: ['binary_sensor.energiemanager_hot_water_heat_pump_active'],
       ev_session_active: ['binary_sensor.energiemanager_ev_charging_session_active'],
       grid_power_filtered: ['sensor.energiemanager_grid_power_filtered'],
       surplus_power: ['sensor.energiemanager_pv_surplus_power'],
       home_power_watts: ['sensor.energiemanager_home_power_consumption'],
+      daily_home_kwh: ['sensor.energiemanager_daily_home_energy_consumption'],
+      daily_pv_kwh: ['sensor.energiemanager_daily_pv_energy_generation'],
+      daily_grid_import_kwh: ['sensor.energiemanager_daily_grid_energy_import'],
+      daily_grid_export_kwh: ['sensor.energiemanager_daily_grid_energy_export'],
       ev_charging_power: ['sensor.energiemanager_ev_charging_power'],
       ev_solar_power: ['sensor.energiemanager_ev_solar_charging_power'],
       ev_grid_power: ['sensor.energiemanager_ev_grid_charging_power'],
@@ -1076,6 +1150,10 @@ class SamEnergiemanagerPanel extends HTMLElement {
       ac_buffer_temp_offset: ['number.energiemanager_ac_buffer_temperature_offset'],
       ac_buffer_min_hold_minutes: ['number.energiemanager_ac_buffer_minimum_hold_time'],
       ac_auto_heat_max_outdoor_temp: ['number.energiemanager_ac_auto_heat_maximum_outdoor_temperature'],
+      dhw_min_surplus_watts: ['number.energiemanager_hot_water_minimum_surplus_power'],
+      dhw_target_temp: ['number.energiemanager_hot_water_pv_target_temperature'],
+      dhw_stop_temp: ['number.energiemanager_hot_water_grid_import_stop_temperature'],
+      dhw_min_temp: ['number.energiemanager_hot_water_winter_minimum_temperature'],
       ev_min_surplus_watts: ['number.energiemanager_ev_minimum_surplus_power'],
       ev_cloud_hysteresis_seconds: ['number.energiemanager_ev_cloud_hysteresis_delay'],
       electricity_price: ['number.energiemanager_electricity_tariff_price'],
@@ -1191,8 +1269,12 @@ class SamEnergiemanagerPanel extends HTMLElement {
       pv_surplus: 'PV-Überschuss',
       fast: 'Schnellladen',
       fast_charge: 'Schnellladen',
+      dhw_ev_ac: 'Warmwasser → Auto → Klima',
+      ev_dhw_ac: 'Auto → Warmwasser → Klima',
+      dhw_ac_ev: 'Warmwasser → Klima → Auto',
+      ev_ac_dhw: 'Auto → Klima → Warmwasser',
     };
-    this._showToast(`Lademodus: ${labels[option] || option}`);
+    this._showToast(`Einstellung: ${labels[option] || option}`);
   }
 
   async _setSwitch(key, turnOn) {
@@ -1306,6 +1388,21 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const homeAttrs = (homeSt && homeSt.attributes) || {};
     const pvW = isFinite(Number(homeAttrs.pv_power_watts)) ? Number(homeAttrs.pv_power_watts) : 0;
     const batW = isFinite(Number(homeAttrs.battery_power_watts)) ? Number(homeAttrs.battery_power_watts) : 0;
+    const dailyHomeKwh = this._num('daily_home_kwh', Number(homeAttrs.daily_home_kwh) || 0);
+    const dailyPvKwh = this._num('daily_pv_kwh', Number(homeAttrs.daily_pv_kwh) || 0);
+    const dailyImportKwh = this._num('daily_grid_import_kwh', Number(homeAttrs.daily_grid_import_kwh) || 0);
+    const dailyExportKwh = this._num('daily_grid_export_kwh', Number(homeAttrs.daily_grid_export_kwh) || 0);
+    const dailyAutarky = isFinite(Number(homeAttrs.daily_autarky_pct)) ? Number(homeAttrs.daily_autarky_pct) : 100;
+
+    const dhwEnabled = this._bool('dhw_enabled');
+    const dhwActive = this._bool('dhw_active');
+    const dhwSt = this._stateObj('dhw_active');
+    const dhwAttrs = (dhwSt && dhwSt.attributes) || {};
+    const waterTemp = isFinite(Number(dhwAttrs.water_temp)) ? Number(dhwAttrs.water_temp) : null;
+    const dhwPowerW = isFinite(Number(dhwAttrs.dhw_power_watts)) ? Number(dhwAttrs.dhw_power_watts) : 0;
+    const dhwForced = !!dhwAttrs.dhw_forced_min_temp;
+    const dhwTargetTemp = this._num('dhw_target_temp', 53);
+    const dhwMinTemp = this._num('dhw_min_temp', 42);
 
     const evW = this._num('ev_charging_power', 0);
     const evSolarW = this._num('ev_solar_power', 0);
@@ -1349,12 +1446,32 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const gridSub = isExporting ? 'Netzeinspeisung (Überschuss)' : isImporting ? 'Netzbezug' : 'Ausbalanciert (Nulleinspeisung)';
 
     const batFlowActive = Math.abs(batW) > 15 || (hasSurplusFlow && batPriorityActive) || (!batLock && isImporting);
+    const dhwFlowActive = dhwActive || dhwPowerW > 50;
     const acFlowActive = acActive;
     const evFlowActive = evAmps >= 3 || evW > 50;
 
     const solarSharePct = evW > 0 ? Math.round((evSolarW / evW) * 100) : 100;
     const isFastMode = mode === 'fast' || mode === 'fast_charge';
     const modeLabel = isFastMode ? '⚡ Schnellladen' : mode === 'pv_surplus' ? '☀️ PV-Überschuss' : '⏹ Aus';
+
+    const prioOrder = this._val('priority_order', 'dhw_ev_ac');
+    let dhwPrio = 'Prio 3';
+    let evPrio = 'Prio 4';
+    let acPrio = 'Prio 5';
+
+    if (prioOrder === 'ev_dhw_ac') {
+      evPrio = 'Prio 3';
+      dhwPrio = 'Prio 4';
+      acPrio = 'Prio 5';
+    } else if (prioOrder === 'dhw_ac_ev') {
+      dhwPrio = 'Prio 3';
+      acPrio = 'Prio 4';
+      evPrio = 'Prio 5';
+    } else if (prioOrder === 'ev_ac_dhw') {
+      evPrio = 'Prio 3';
+      acPrio = 'Prio 4';
+      dhwPrio = 'Prio 5';
+    }
 
     const batPowerLabel =
       batW < -10
@@ -1364,6 +1481,30 @@ class SamEnergiemanagerPanel extends HTMLElement {
           : `Reserve-Ziel: ${_fmtNum(reserveSoc, 0)} %`;
 
     return `
+      <!-- Compact Daily Energy Overview -->
+      <div class="em-stats">
+        <div class="em-stat">
+          <div class="em-stat-top"><span>Hausverbrauch (Heute)</span><span>🏠</span></div>
+          <div class="em-stat-val">${_fmtNum(dailyHomeKwh, 2)} kWh</div>
+          <div class="em-stat-sub">Aktuell: ${_fmtNum(homeW, 0)} W · Autarkie: ${_fmtNum(dailyAutarky, 0)} %</div>
+        </div>
+        <div class="em-stat">
+          <div class="em-stat-top"><span>PV-Erzeugung (Heute)</span><span>☀️</span></div>
+          <div class="em-stat-val" style="color:var(--em-solar)">${_fmtNum(dailyPvKwh, 2)} kWh</div>
+          <div class="em-stat-sub">Wechselrichter aktuell: ${_fmtNum(pvW, 0)} W</div>
+        </div>
+        <div class="em-stat">
+          <div class="em-stat-top"><span>Netzbezug (Heute)</span><span>🔌</span></div>
+          <div class="em-stat-val" style="color:var(--em-grid-import)">${_fmtNum(dailyImportKwh, 2)} kWh</div>
+          <div class="em-stat-sub">Aus dem öffentlichen Netz</div>
+        </div>
+        <div class="em-stat">
+          <div class="em-stat-top"><span>Einspeisung (Heute)</span><span>⚡</span></div>
+          <div class="em-stat-val" style="color:var(--em-grid-export)">${_fmtNum(dailyExportKwh, 2)} kWh</div>
+          <div class="em-stat-sub">Überschuss ins Netz</div>
+        </div>
+      </div>
+
       <!-- Unified Animated Energy Flow & Priority Diagram Card -->
       <div class="em-card">
         <div class="em-card-head">
@@ -1371,6 +1512,9 @@ class SamEnergiemanagerPanel extends HTMLElement {
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <span class="em-badge ${batLock ? 'em-badge-warn' : 'em-badge-ok'}">
               ${batLock ? '🔒 Anker Entladesperre aktiv' : '🔓 Anker Entladung frei'}
+            </span>
+            <span class="em-badge ${dhwActive ? 'em-badge-warn' : 'em-badge-muted'}">
+              ${dhwActive ? `🚿 Warmwasser heizt (${waterTemp != null ? `${_fmtNum(waterTemp, 0)} °C` : 'WP'})` : '🚿 Warmwasser bereit'}
             </span>
             <span class="em-badge ${acActive ? 'em-badge-info' : 'em-badge-muted'}">
               ${acActive
@@ -1426,17 +1570,19 @@ class SamEnergiemanagerPanel extends HTMLElement {
             <span style="color:var(--primary-color, #0ea5e9)">Modus: ${modeLabel}</span>
           </div>
 
-          <!-- Bottom Animated SVG Connectors (Home Hub -> 3 Priority Consumers) -->
+          <!-- Bottom Animated SVG Connectors (Home Hub -> 4 Priority Consumers) -->
           <svg class="em-flow-svg" viewBox="0 0 800 52" preserveAspectRatio="none">
-            <path class="em-flow-line-bg" d="M 400 0 C 400 26, 135 22, 135 52"/>
-            <path class="em-flow-line-bg" d="M 400 0 L 400 52"/>
-            <path class="em-flow-line-bg" d="M 400 0 C 400 26, 665 22, 665 52"/>
-            ${batFlowActive ? `<path class="em-flow-line-anim" stroke="#3b82f6" d="M 400 0 C 400 26, 135 22, 135 52"/>` : ''}
-            ${acFlowActive ? `<path class="em-flow-line-anim" stroke="#06b6d4" d="M 400 0 L 400 52"/>` : ''}
-            ${evFlowActive ? `<path class="em-flow-line-anim" stroke="#8b5cf6" d="M 400 0 C 400 26, 665 22, 665 52"/>` : ''}
+            <path class="em-flow-line-bg" d="M 400 0 C 400 26, 100 22, 100 52"/>
+            <path class="em-flow-line-bg" d="M 400 0 C 400 26, 300 22, 300 52"/>
+            <path class="em-flow-line-bg" d="M 400 0 C 400 26, 500 22, 500 52"/>
+            <path class="em-flow-line-bg" d="M 400 0 C 400 26, 700 22, 700 52"/>
+            ${batFlowActive ? `<path class="em-flow-line-anim" stroke="#3b82f6" d="M 400 0 C 400 26, 100 22, 100 52"/>` : ''}
+            ${dhwFlowActive ? `<path class="em-flow-line-anim" stroke="#f97316" d="M 400 0 C 400 26, 300 22, 300 52"/>` : ''}
+            ${acFlowActive ? `<path class="em-flow-line-anim" stroke="#06b6d4" d="M 400 0 C 400 26, 500 22, 500 52"/>` : ''}
+            ${evFlowActive ? `<path class="em-flow-line-anim" stroke="#8b5cf6" d="M 400 0 C 400 26, 700 22, 700 52"/>` : ''}
           </svg>
 
-          <!-- Bottom Row: 3 Priority Consumer Nodes -->
+          <!-- Bottom Row: 4 Priority Consumer Nodes -->
           <div class="em-flow-consumers">
             <!-- Node 1: Anker Solarbank -->
             <div class="em-flow-node ${batPriorityActive ? 'active-battery' : ''} ${batLock ? 'locked-battery' : ''}">
@@ -1461,16 +1607,46 @@ class SamEnergiemanagerPanel extends HTMLElement {
                   ${batLock ? '🔒 Entladesperre aktiv' : '🔓 Entladung frei'}
                 </span>
                 <span class="em-pill">
-                  ${batPriorityActive ? '⏳ Klima & Auto warten' : '✅ Überschuss freigegeben'}
+                  ${batPriorityActive ? '⏳ Verbraucher warten' : '✅ Überschuss freigegeben'}
                 </span>
               </div>
             </div>
 
-            <!-- Node 2: Multisplit-Klimaanlage -->
+            <!-- Node 2: Warmwasser-Wärmepumpe (LG) -->
+            <div class="em-flow-node ${dhwActive ? 'active-dhw' : ''}">
+              <div class="em-node-head">
+                <span class="em-node-title">🚿 Warmwasser-WP</span>
+                <span class="em-prio-tag">${dhwPrio}</span>
+              </div>
+              <div class="em-node-body">
+                <div class="em-node-metrics">
+                  <div class="em-node-big" style="color:#f97316">
+                    ${waterTemp != null ? `${_fmtNum(waterTemp, 0)} °C` : dhwActive ? 'Heizt' : 'Bereit'}
+                  </div>
+                  <div class="em-node-sub">
+                    PV-Ziel: <strong>${_fmtNum(dhwTargetTemp, 0)} °C</strong> · Min: <strong>${_fmtNum(dhwMinTemp, 0)} °C</strong><br>
+                    Leistung: <strong>${_fmtNum(dhwPowerW, 0)} W</strong> · Fenster: 10–18 Uhr
+                  </div>
+                </div>
+              </div>
+              <div class="em-node-pills">
+                <span class="em-pill ${dhwActive ? 'warn' : ''}">
+                  ${dhwForced
+                    ? '🔥 Winter-Schutz (< Min.)'
+                    : dhwActive
+                      ? '☀️ PV-Aufheizung (heat_pump)'
+                      : dhwEnabled
+                        ? `Ab ${_fmtNum(this._num('dhw_min_surplus_watts', 500), 0)} W Überschuss`
+                        : '⏸ Automatik aus'}
+                </span>
+              </div>
+            </div>
+
+            <!-- Node 3: Multisplit-Klimaanlage -->
             <div class="em-flow-node ${acActive ? 'active-ac' : ''}">
               <div class="em-node-head">
                 <span class="em-node-title">❄️ Multisplit-Klima</span>
-                <span class="em-prio-tag">Prio 3</span>
+                <span class="em-prio-tag">${acPrio}</span>
               </div>
               <div class="em-node-body">
                 <div class="em-node-metrics">
@@ -1503,11 +1679,11 @@ class SamEnergiemanagerPanel extends HTMLElement {
               </div>
             </div>
 
-            <!-- Node 3: Tesla Wallbox / BLE -->
+            <!-- Node 4: Tesla Wallbox / BLE -->
             <div class="em-flow-node ${evFlowActive ? 'active-ev' : ''}">
               <div class="em-node-head">
                 <span class="em-node-title">🚗 Tesla Ladung</span>
-                <span class="em-prio-tag">Prio 4</span>
+                <span class="em-prio-tag">${evPrio}</span>
               </div>
               <div class="em-node-body">
                 ${_renderRingGauge(evSoc != null ? evSoc : 0, '#8b5cf6')}
@@ -1550,10 +1726,21 @@ class SamEnergiemanagerPanel extends HTMLElement {
       <div class="em-card">
         <div class="em-card-head">
           <div class="em-card-title">🎛️ Schnellsteuerung & Betriebsmodi</div>
-          <div class="em-seg" role="group" aria-label="Tesla Lademodus">
-            <button class="em-seg-btn ${mode === 'off' ? 'active' : ''}" data-mode="off">⏹ Aus</button>
-            <button class="em-seg-btn ${mode === 'pv_surplus' ? 'active' : ''}" data-mode="pv_surplus">☀️ PV-Überschuss</button>
-            <button class="em-seg-btn ${isFastMode ? 'active' : ''}" data-mode="fast">⚡ Schnellladen</button>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:0.75em;font-weight:700;color:var(--secondary-text-color);text-transform:uppercase">Kaskaden-Prio:</span>
+              <select class="em-select" data-select="priority_order">
+                <option value="dhw_ev_ac" ${prioOrder === 'dhw_ev_ac' ? 'selected' : ''}>🚿 Warmwasser → 🚗 Auto → ❄️ Klima</option>
+                <option value="ev_dhw_ac" ${prioOrder === 'ev_dhw_ac' ? 'selected' : ''}>🚗 Auto → 🚿 Warmwasser → ❄️ Klima</option>
+                <option value="dhw_ac_ev" ${prioOrder === 'dhw_ac_ev' ? 'selected' : ''}>🚿 Warmwasser → ❄️ Klima → 🚗 Auto</option>
+                <option value="ev_ac_dhw" ${prioOrder === 'ev_ac_dhw' ? 'selected' : ''}>🚗 Auto → ❄️ Klima → 🚿 Warmwasser</option>
+              </select>
+            </div>
+            <div class="em-seg" role="group" aria-label="Tesla Lademodus">
+              <button class="em-seg-btn ${mode === 'off' ? 'active' : ''}" data-mode="off">⏹ Aus</button>
+              <button class="em-seg-btn ${mode === 'pv_surplus' ? 'active' : ''}" data-mode="pv_surplus">☀️ PV-Überschuss</button>
+              <button class="em-seg-btn ${isFastMode ? 'active' : ''}" data-mode="fast">⚡ Schnellladen</button>
+            </div>
           </div>
         </div>
 
@@ -1597,9 +1784,19 @@ class SamEnergiemanagerPanel extends HTMLElement {
             <div class="em-hint">Stoppt „Schnellladen“ bei diesem Akkustand automatisch.</div>
           </div>
 
-          <!-- AC Buffer Switches & Quick Actions -->
+          <!-- DHW & AC Buffer Switches & Quick Actions -->
           <div class="em-ctrl-box" style="justify-content:space-between">
             <div class="em-switch-row">
+              <div>
+                <div class="em-ctrl-lbl">🚿 Warmwasser-WP Automatik</div>
+                <div class="em-hint">PV-Aufheizung bis ${_fmtNum(dhwTargetTemp, 0)} °C & Winter-Schutz (&lt; ${_fmtNum(dhwMinTemp, 0)} °C).</div>
+              </div>
+              <label class="em-switch">
+                <input type="checkbox" data-switch="dhw_enabled" ${dhwEnabled ? 'checked' : ''}>
+                <span class="em-switch-track"></span>
+              </label>
+            </div>
+            <div class="em-switch-row" style="padding-top:6px;border-top:1px solid var(--divider-color, rgba(127,127,127,0.12))">
               <div>
                 <div class="em-ctrl-lbl">❄️ Klimaanlage als Wärmepuffer</div>
                 <div class="em-hint">Sollwert um ±${_fmtNum(this._num('ac_buffer_temp_offset', 2.5), 1)} °C bei Überschuss anpassen.</div>
@@ -1863,6 +2060,12 @@ class SamEnergiemanagerPanel extends HTMLElement {
     sr.querySelectorAll('[data-mode]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this._setSelect('charging_mode', btn.dataset.mode);
+      });
+    });
+
+    sr.querySelectorAll('[data-select]').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        this._setSelect(sel.dataset.select, sel.value);
       });
     });
 

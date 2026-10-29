@@ -24,6 +24,9 @@ CONF_CLIMATE_ENTITY = "climate_entity"
 CONF_OUTDOOR_TEMP_SENSOR = "outdoor_temp_sensor"
 CONF_PV_POWER_SENSOR = "pv_power_sensor"
 CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
+CONF_WATER_HEATER_ENTITY = "water_heater_entity"
+CONF_WATER_TEMP_SENSOR = "water_temp_sensor"
+CONF_SOLAR_PEAK_TIME_SENSOR = "solar_peak_time_sensor"
 
 # Options keys
 CONF_UPDATE_INTERVAL_SECONDS = "update_interval_seconds"
@@ -40,13 +43,21 @@ DEFAULT_TESLA_TARGET_SOC = 80.0
 EMA_ALPHA = 0.35
 DEADBAND_WATTS = 60.0
 
-# B. Thermal AC Buffer
+# B. Thermal AC Buffer & DHW Heat Pump
 AC_BUFFER_MIN_SURPLUS_WATTS = 500.0
 AC_BUFFER_MAX_SURPLUS_WATTS = 1350.0
 AC_BUFFER_TEMP_OFFSET = 2.5
 AC_BUFFER_MIN_HOLD_SECONDS = 1200.0
 AC_AUTO_HEAT_MAX_OUTDOOR_TEMP = 11.0
 AC_AUTO_HEAT_DEFAULT_TEMP = 22.0
+
+DHW_MIN_SURPLUS_WATTS = 500.0
+DHW_STOP_GRID_IMPORT_WATTS = 200.0
+DHW_TARGET_TEMP = 53.0
+DHW_STOP_TEMP = 51.0
+DHW_MIN_TEMP = 42.0
+DHW_WINDOW_START_HOUR = 10
+DHW_WINDOW_END_HOUR = 18
 
 # C. Home Battery Discharge Lock
 BATTERY_LOCK_THRESHOLD_WATTS = 250.0
@@ -70,5 +81,19 @@ CHARGING_MODES: tuple[str, ...] = (
     CHARGING_MODE_FAST,
 )
 
-# E. EV Charging Session Tracking
+# E. Consumer Priority Order
+PRIORITY_DHW_EV_AC = "dhw_ev_ac"  # Warmwasser → Auto → Klima (Standard)
+PRIORITY_EV_DHW_AC = "ev_dhw_ac"  # Auto → Warmwasser → Klima
+PRIORITY_DHW_AC_EV = "dhw_ac_ev"  # Warmwasser → Klima → Auto
+PRIORITY_EV_AC_DHW = "ev_ac_dhw"  # Auto → Klima → Warmwasser
+
+PRIORITY_ORDERS: tuple[str, ...] = (
+    PRIORITY_DHW_EV_AC,
+    PRIORITY_EV_DHW_AC,
+    PRIORITY_DHW_AC_EV,
+    PRIORITY_EV_AC_DHW,
+)
+DEFAULT_PRIORITY_ORDER = PRIORITY_DHW_EV_AC
+
+# F. EV Charging Session Tracking
 SESSION_ACTIVE_THRESHOLD_WATTS = 200.0

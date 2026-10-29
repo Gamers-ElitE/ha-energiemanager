@@ -1,7 +1,7 @@
 """Data update coordinator for sam_energiemanager."""
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from custom_components.sam_energiemanager.const import (
@@ -32,11 +32,22 @@ from custom_components.sam_energiemanager.const import (
     CONF_GRID_POWER_SENSOR,
     CONF_OUTDOOR_TEMP_SENSOR,
     CONF_PV_POWER_SENSOR,
+    CONF_SOLAR_PEAK_TIME_SENSOR,
+    CONF_WATER_HEATER_ENTITY,
+    CONF_WATER_TEMP_SENSOR,
     DEADBAND_WATTS,
     DEFAULT_BATTERY_RESERVE_SOC,
     DEFAULT_ELECTRICITY_PRICE,
+    DEFAULT_PRIORITY_ORDER,
     DEFAULT_TESLA_MAX_CURRENT,
     DEFAULT_TESLA_TARGET_SOC,
+    DHW_MIN_SURPLUS_WATTS,
+    DHW_MIN_TEMP,
+    DHW_STOP_GRID_IMPORT_WATTS,
+    DHW_STOP_TEMP,
+    DHW_TARGET_TEMP,
+    DHW_WINDOW_END_HOUR,
+    DHW_WINDOW_START_HOUR,
     DOMAIN,
     EMA_ALPHA,
     EV_CLOUD_HYSTERESIS_SECONDS,
@@ -46,6 +57,11 @@ from custom_components.sam_energiemanager.const import (
     EV_STOP_GRID_IMPORT_WATTS,
     EV_VOLTAGE,
     EVENT_SESSION_COMPLETED,
+    PRIORITY_DHW_AC_EV,
+    PRIORITY_DHW_EV_AC,
+    PRIORITY_EV_AC_DHW,
+    PRIORITY_EV_DHW_AC,
+    PRIORITY_ORDERS,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -79,13 +95,19 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self.tesla_max_current: float = DEFAULT_TESLA_MAX_CURRENT
         self.tesla_target_soc: float = DEFAULT_TESLA_TARGET_SOC
         self.charging_mode: str = CHARGING_MODE_PV_SURPLUS
+        self.priority_order: str = DEFAULT_PRIORITY_ORDER
         self.ac_buffer_enabled: bool = False
         self.ac_auto_heat_enabled: bool = False
+        self.dhw_enabled: bool = True
 
         self.ema_alpha: float = EMA_ALPHA
         self.deadband_watts: float = DEADBAND_WATTS
         self.battery_lock_threshold_watts: float = BATTERY_LOCK_THRESHOLD_WATTS
         self.battery_lock_release_seconds: float = BATTERY_LOCK_RELEASE_SECONDS
+        self.dhw_min_surplus_watts: float = DHW_MIN_SURPLUS_WATTS
+        self.dhw_target_temp: float = DHW_TARGET_TEMP
+        self.dhw_stop_temp: float = DHW_STOP_TEMP
+        self.dhw_min_temp: float = DHW_MIN_TEMP
         self.ac_buffer_min_surplus_watts: float = AC_BUFFER_MIN_SURPLUS_WATTS
         self.ac_buffer_max_surplus_watts: float = AC_BUFFER_MAX_SURPLUS_WATTS
         self.ac_buffer_temp_offset: float = AC_BUFFER_TEMP_OFFSET
@@ -106,10 +128,18 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._ev_low_surplus_since: datetime | None = None
         self._ev_charging_active: bool = False
         self._ev_target_amps: int = 0
+        self._dhw_active: bool = False
+        self._dhw_forced_min_temp: bool = False
+        self._dhw_reason: str = "idle"
         self._ac_buffer_active: bool = False
         self._ac_buffer_activated_at: datetime | None = None
         self._ac_saved_temperature: float | None = None
         self._ac_saved_hvac_mode: str | None = None
+        self._daily_date: date | None = None
+        self._daily_home_kwh: float = 0.0
+        self._daily_pv_kwh: float = 0.0
+        self._daily_grid_import_kwh: float = 0.0
+        self._daily_grid_export_kwh: float = 0.0
         self.session_tracker = SessionTracker()
 
     def async_setup_listeners(self) -> Callable[[], None]:
@@ -265,6 +295,31 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._home_ema = compute_ema(home_pure_raw, self._home_ema, alpha=self.ema_alpha)
         home_power_watts = round(self._home_ema, 1)
 
+        # Daily Energy Summary (resets at local midnight)
+        now_local = dt_util.as_local(now_utc)
+        today_date = now_local.date()
+        if self._daily_date != today_date:
+            self._daily_date = today_date
+            self._daily_home_kwh = 0.0
+            self._daily_pv_kwh = 0.0
+            self._daily_grid_import_kwh = 0.0
+            self._daily_grid_export_kwh = 0.0
+        if 0.0 < dt_hours < 0.25:
+            self._daily_home_kwh += (home_total_raw / 1000.0) * dt_hours
+            self._daily_pv_kwh += (max(0.0, pv_power) / 1000.0) * dt_hours
+            self._daily_grid_import_kwh += (max(0.0, grid_10s_mean) / 1000.0) * dt_hours
+            self._daily_grid_export_kwh += (max(0.0, -grid_10s_mean) / 1000.0) * dt_hours
+        inverter_daily = self._read_entity_watts("sensor.inverter_tagesertrag")
+        daily_pv_kwh = round(max(self._daily_pv_kwh, inverter_daily or 0.0), 2)
+        daily_home_kwh = round(self._daily_home_kwh, 2)
+        daily_grid_import_kwh = round(self._daily_grid_import_kwh, 2)
+        daily_grid_export_kwh = round(self._daily_grid_export_kwh, 2)
+        daily_autarky_pct = (
+            round(max(0.0, min(100.0, (1.0 - self._daily_grid_import_kwh / self._daily_home_kwh) * 100.0)), 1)
+            if self._daily_home_kwh > 0.01
+            else 100.0
+        )
+
         # B. Stage 2: Home Battery Priority
         battery_priority_active = (
             self.battery_reserve_soc > 0.0 and battery_soc is not None and battery_soc < self.battery_reserve_soc
@@ -283,11 +338,73 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         await self._async_sync_battery_lock()
 
+        # Pre-read hot water state for priority determination
+        water_temp = self._read_water_temperature()
+        dhw_power = self._read_dhw_power()
+
+        # Readiness of controllable downstream consumers
+        ev_ready_to_charge = (
+            self.charging_mode == CHARGING_MODE_PV_SURPLUS
+            and ev_ready_at_home
+            and (ev_soc is None or ev_soc < self.tesla_target_soc)
+        )
+        dhw_ready_to_heat = (
+            self.dhw_enabled
+            and bool(self._resolve_water_heater_entities())
+            and (water_temp is None or water_temp < self.dhw_target_temp)
+        )
+        ev_can_or_is_charging = ev_ready_to_charge and (
+            self._ev_charging_active or surplus_power >= self.ev_min_surplus_watts
+        )
+
+        # Consumer priority cascade yielding
+        dhw_yield = False
+        ev_yield = False
+        ac_yield = False
+
+        if self.priority_order == PRIORITY_DHW_EV_AC:
+            # Prio 3: DHW -> Prio 4: EV -> Prio 5: AC
+            ev_yield = dhw_ready_to_heat and surplus_power < self.dhw_min_surplus_watts and not self._ev_charging_active
+            ac_yield = ev_can_or_is_charging and (
+                not self._ev_charging_active or self._ev_target_amps < self.tesla_max_current
+            )
+        elif self.priority_order == PRIORITY_EV_DHW_AC:
+            # Prio 3: EV -> Prio 4: DHW -> Prio 5: AC
+            dhw_yield = ev_can_or_is_charging and surplus_power < (
+                self.ev_min_surplus_watts + self.dhw_min_surplus_watts
+            )
+            ac_yield = (
+                ev_can_or_is_charging
+                and (not self._ev_charging_active or self._ev_target_amps < self.tesla_max_current)
+            ) or dhw_ready_to_heat
+        elif self.priority_order == PRIORITY_DHW_AC_EV:
+            # Prio 3: DHW -> Prio 4: AC -> Prio 5: EV
+            ev_yield = self.ac_buffer_enabled and (
+                self.ac_buffer_min_surplus_watts <= surplus_power <= self.ac_buffer_max_surplus_watts
+            )
+        elif self.priority_order == PRIORITY_EV_AC_DHW:
+            # Prio 3: EV -> Prio 4: AC -> Prio 5: DHW
+            ac_yield = ev_can_or_is_charging and (
+                not self._ev_charging_active or self._ev_target_amps < self.tesla_max_current
+            )
+            dhw_yield = ev_can_or_is_charging or self._ac_buffer_active
+
+        # C2. Stage 2b: Domestic Hot Water (DHW) Heat Pump Control
+        await self._async_update_dhw(
+            now_local=now_local,
+            grid_filtered=grid_filtered,
+            surplus_power=surplus_power,
+            battery_priority_active=battery_priority_active,
+            yield_to_higher_priority=dhw_yield,
+            water_temp=water_temp,
+        )
+
         # B. Stage 3: Thermal AC Buffer
         await self._async_update_ac_buffer(
             now_utc=now_utc,
             surplus_power=surplus_power,
             battery_priority_active=battery_priority_active,
+            yield_to_higher_priority=ac_yield,
             in_deadband=in_deadband,
         )
 
@@ -300,6 +417,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             ev_soc=ev_soc,
             ev_ready_at_home=ev_ready_at_home,
             battery_priority_active=battery_priority_active,
+            yield_to_higher_priority=ev_yield,
             in_deadband=in_deadband,
         )
 
@@ -324,6 +442,22 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "battery_power_watts": round(battery_signed_power, 1),
             "home_power_watts": home_power_watts,
             "home_power_total_watts": round(home_total_raw, 1),
+            "daily_home_kwh": daily_home_kwh,
+            "daily_pv_kwh": daily_pv_kwh,
+            "daily_grid_import_kwh": daily_grid_import_kwh,
+            "daily_grid_export_kwh": daily_grid_export_kwh,
+            "daily_autarky_pct": daily_autarky_pct,
+            "priority_order": self.priority_order,
+            "dhw_enabled": self.dhw_enabled,
+            "dhw_active": self._dhw_active,
+            "dhw_forced_min_temp": self._dhw_forced_min_temp,
+            "dhw_reason": self._dhw_reason,
+            "water_temp": water_temp,
+            "dhw_power_watts": round(dhw_power, 1),
+            "dhw_min_surplus_watts": self.dhw_min_surplus_watts,
+            "dhw_target_temp": self.dhw_target_temp,
+            "dhw_stop_temp": self.dhw_stop_temp,
+            "dhw_min_temp": self.dhw_min_temp,
             "ev_charging_power": round(ev_power, 1),
             "ev_solar_power": ev_solar_w,
             "ev_grid_power": ev_grid_w,
@@ -357,18 +491,185 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "electricity_price": self.electricity_price,
         }
 
+    def _resolve_water_heater_entities(self) -> list[str]:
+        """Return configured and auto-discovered LG water heater entities."""
+        result: list[str] = []
+        configured = self.config_entry.data.get(CONF_WATER_HEATER_ENTITY)
+        for candidate in (configured, "water_heater.wassererhitzer_2", "water_heater.wassererhitzer"):
+            if candidate and candidate not in result and self.hass.states.get(candidate) is not None:
+                result.append(candidate)
+        return result
+
+    def _read_water_temperature(self) -> float | None:
+        """Read hot water temperature from configured sensor, LG sensor, or water_heater attributes."""
+        configured = self._read_float(CONF_WATER_TEMP_SENSOR)
+        if configured is not None:
+            return configured
+        for sensor_id in ("sensor.wassererhitzer_hot_water_temperature", "sensor.sim_water_temperature"):
+            val = self._read_entity_watts(sensor_id)
+            if val is not None:
+                return val
+        for entity_id in self._resolve_water_heater_entities():
+            st = self.hass.states.get(entity_id)
+            if st is not None:
+                raw_temp = st.attributes.get("current_temperature")
+                if raw_temp is not None:
+                    try:
+                        return float(raw_temp)
+                    except TypeError, ValueError:
+                        continue
+        return None
+
+    def _read_dhw_power(self) -> float:
+        """Read current power draw of the hot water heat pump in Watts."""
+        for sensor_id in ("sensor.wassererhitzer_energy_current", "sensor.sim_dhw_power"):
+            val = self._read_entity_watts(sensor_id)
+            if val is not None:
+                return max(0.0, val)
+        return 450.0 if self._dhw_active else 0.0
+
+    def _is_past_solar_peak(self, now_local: datetime) -> bool:
+        """Check if current time is at or past today's solar peak time for winter minimum-temp boost."""
+        peak_id = self.config_entry.data.get(CONF_SOLAR_PEAK_TIME_SENSOR) or "sensor.power_highest_peak_time_today"
+        st = self.hass.states.get(peak_id)
+        if st is not None and st.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            parsed = dt_util.parse_datetime(st.state)
+            if parsed is not None:
+                return now_local >= dt_util.as_local(parsed)
+        return now_local.hour >= 13
+
+    async def _async_update_dhw(
+        self,
+        *,
+        now_local: datetime,
+        grid_filtered: float,
+        surplus_power: float,
+        battery_priority_active: bool,
+        yield_to_higher_priority: bool = False,
+        water_temp: float | None,
+    ) -> None:
+        """Control the domestic hot water heat pump via PV surplus and minimum temperature protection."""
+        targets = self._resolve_water_heater_entities()
+        if not self.dhw_enabled or not targets:
+            if self._dhw_active:
+                self._dhw_active = False
+                self._dhw_forced_min_temp = False
+                self._dhw_reason = "disabled"
+            return
+
+        in_daytime = DHW_WINDOW_START_HOUR <= now_local.hour < DHW_WINDOW_END_HOUR
+
+        # 1. Winter minimum temperature boost (< 42 °C at/after solar peak during daytime)
+        if (
+            in_daytime
+            and water_temp is not None
+            and water_temp < self.dhw_min_temp
+            and self._is_past_solar_peak(now_local)
+        ):
+            self._dhw_forced_min_temp = True
+
+        if self._dhw_forced_min_temp:
+            if not in_daytime or (water_temp is not None and water_temp >= self.dhw_stop_temp):
+                self._dhw_forced_min_temp = False
+            else:
+                self._dhw_active = True
+                self._dhw_reason = "min_temp_boost"
+                await self._async_set_dhw_mode(targets, heating=True)
+                return
+
+        # 2. Yield to higher-priority consumers (e.g. EV first) if requested
+        if yield_to_higher_priority and not self._dhw_forced_min_temp:
+            if self._dhw_active:
+                self._dhw_active = False
+                self._dhw_reason = "yield_to_higher_priority"
+                await self._async_set_dhw_mode(targets, heating=False)
+            return
+
+        # 3. Normal PV surplus heating (10:00 - 18:00) and smart turn-off
+        if not in_daytime:
+            if self._dhw_active or DHW_WINDOW_END_HOUR <= now_local.hour < 20:
+                self._dhw_active = False
+                self._dhw_reason = "evening_off"
+                await self._async_set_dhw_mode(targets, heating=False)
+            return
+
+        if not self._dhw_active:
+            below_target = water_temp is None or water_temp < self.dhw_target_temp
+            if not battery_priority_active and surplus_power >= self.dhw_min_surplus_watts and below_target:
+                self._dhw_active = True
+                self._dhw_reason = "pv_surplus"
+                await self._async_set_dhw_mode(targets, heating=True)
+        else:
+            target_reached = water_temp is not None and water_temp >= self.dhw_target_temp
+            grid_import_stop = grid_filtered > DHW_STOP_GRID_IMPORT_WATTS and (
+                water_temp is None or water_temp > self.dhw_stop_temp
+            )
+            if target_reached or grid_import_stop:
+                self._dhw_active = False
+                self._dhw_reason = "target_reached" if target_reached else "grid_import_stop"
+                await self._async_set_dhw_mode(targets, heating=False)
+            else:
+                await self._async_set_dhw_mode(targets, heating=True)
+
+    async def _async_set_dhw_mode(self, targets: list[str], *, heating: bool) -> None:
+        """Set operation mode on water_heater or select entities ('heat_pump' vs 'vacation'/'off')."""
+        for entity_id in targets:
+            st = self.hass.states.get(entity_id)
+            if st is None or st.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                continue
+            domain = entity_id.split(".", 1)[0]
+            options: list[str] = list(st.attributes.get("operation_list") or st.attributes.get("options") or [])
+            if heating:
+                desired = "heat_pump"
+            elif "vacation" in options:
+                desired = "vacation"
+            elif "off" in options:
+                desired = "off"
+            else:
+                desired = "vacation"
+
+            current_mode = st.attributes.get("operation_mode") or st.state
+            if current_mode == desired:
+                continue
+            if domain == "select":
+                await self.hass.services.async_call(
+                    "select",
+                    "select_option",
+                    {ATTR_ENTITY_ID: entity_id, "option": desired},
+                    blocking=False,
+                )
+            elif domain == "water_heater":
+                await self.hass.services.async_call(
+                    "water_heater",
+                    "set_operation_mode",
+                    {ATTR_ENTITY_ID: entity_id, "operation_mode": desired},
+                    blocking=False,
+                )
+
     async def _async_update_ac_buffer(
         self,
         *,
         now_utc: datetime,
         surplus_power: float,
         battery_priority_active: bool,
+        yield_to_higher_priority: bool = False,
         in_deadband: bool,
     ) -> None:
         """Update the thermal AC buffer state with 20-minute compressor protection and temperature shift."""
         was_active = self._ac_buffer_active
 
         if not self.ac_buffer_enabled:
+            self._ac_buffer_active = False
+            self._ac_buffer_activated_at = None
+            if was_active:
+                await self._async_apply_ac_buffer_offset(activate=False)
+            return
+
+        if yield_to_higher_priority:
+            if was_active and self._ac_buffer_activated_at is not None:
+                elapsed = (now_utc - self._ac_buffer_activated_at).total_seconds()
+                if elapsed < self.ac_buffer_min_hold_minutes * 60.0:
+                    return
             self._ac_buffer_active = False
             self._ac_buffer_activated_at = None
             if was_active:
@@ -500,6 +801,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         ev_soc: float | None,
         ev_ready_at_home: bool,
         battery_priority_active: bool,
+        yield_to_higher_priority: bool = False,
         in_deadband: bool,
     ) -> None:
         """Evaluate EV charging mode, hysteresis, BLE wake-up, and current setpoint."""
@@ -509,7 +811,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         if self.charging_mode == CHARGING_MODE_FAST and ev_soc is not None and ev_soc >= self.tesla_target_soc:
             self.charging_mode = CHARGING_MODE_OFF
 
-        if self.charging_mode == CHARGING_MODE_OFF or not ev_ready_at_home:
+        if self.charging_mode == CHARGING_MODE_OFF or not ev_ready_at_home or yield_to_higher_priority:
             self._ev_charging_active = False
             self._ev_target_amps = 0
             self._ev_low_surplus_since = None
@@ -662,6 +964,17 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self.charging_mode = mode
         await self.async_refresh()
 
+    async def async_set_priority_order(self, order: str) -> None:
+        """Update the surplus consumer priority cascade order and refresh."""
+        if order not in PRIORITY_ORDERS:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_priority_order",
+                translation_placeholders={"order": order},
+            )
+        self.priority_order = order
+        await self.async_refresh()
+
     async def async_set_ac_buffer_enabled(self, *, enabled: bool) -> None:
         """Enable or disable the thermal AC buffer and refresh."""
         self.ac_buffer_enabled = enabled
@@ -671,3 +984,34 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         """Enable or disable automatic climate heating startup when off and outdoor temp is low."""
         self.ac_auto_heat_enabled = enabled
         await self.async_refresh()
+
+    async def async_set_dhw_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable automatic domestic hot water heat pump control and refresh."""
+        self.dhw_enabled = enabled
+        await self.async_refresh()
+
+    def restore_sensor_value(
+        self,
+        key: str,
+        value: Any,
+        *,
+        attributes: dict[str, Any] | None = None,
+        last_updated: datetime | None = None,
+    ) -> None:
+        """Restore lifetime and same-day energy counters across Home Assistant restarts."""
+        if key == "ev_solar_lifetime_kwh":
+            self.session_tracker.solar_lifetime_kwh = max(self.session_tracker.solar_lifetime_kwh, float(value))
+        elif key == "ev_grid_lifetime_kwh":
+            self.session_tracker.grid_lifetime_kwh = max(self.session_tracker.grid_lifetime_kwh, float(value))
+        elif key == "last_session_summary" and isinstance(value, str) and value:
+            self.session_tracker.last_summary = value
+            if attributes:
+                self.session_tracker.last_session_data = dict(attributes)
+        elif key in ("daily_home_kwh", "daily_pv_kwh", "daily_grid_import_kwh", "daily_grid_export_kwh"):
+            today = dt_util.as_local(dt_util.utcnow()).date()
+            if last_updated is None or dt_util.as_local(last_updated).date() == today:
+                self._daily_date = today
+                attr_name = f"_{key}"
+                setattr(self, attr_name, max(getattr(self, attr_name, 0.0), float(value)))
+        if self.data is not None and key in self.data:
+            self.data[key] = value

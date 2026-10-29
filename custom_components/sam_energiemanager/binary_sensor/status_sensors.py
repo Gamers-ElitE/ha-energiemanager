@@ -35,6 +35,18 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerBinarySensorEntityDescription, ...] = (
         },
     ),
     EnergiemanagerBinarySensorEntityDescription(
+        key="dhw_active",
+        translation_key="dhw_active",
+        device_class=BinarySensorDeviceClass.HEAT,
+        value_fn=lambda data: data.get("dhw_active"),
+        attr_fn=lambda data: {
+            "water_temp": data.get("water_temp"),
+            "dhw_power_watts": data.get("dhw_power_watts"),
+            "dhw_forced_min_temp": data.get("dhw_forced_min_temp"),
+            "dhw_reason": data.get("dhw_reason"),
+        },
+    ),
+    EnergiemanagerBinarySensorEntityDescription(
         key="ev_session_active",
         translation_key="ev_session_active",
         device_class=BinarySensorDeviceClass.BATTERY_CHARGING,

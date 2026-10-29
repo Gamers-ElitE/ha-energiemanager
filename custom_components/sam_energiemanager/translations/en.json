@@ -18,7 +18,10 @@
           "climate_entity": "Multisplit AC climate entity",
           "outdoor_temp_sensor": "Outdoor temperature sensor",
           "pv_power_sensor": "PV inverter power sensor",
-          "battery_power_sensor": "Home battery net power sensor"
+          "battery_power_sensor": "Home battery net power sensor",
+          "water_heater_entity": "Hot water heat pump entity",
+          "water_temp_sensor": "Hot water temperature sensor",
+          "solar_peak_time_sensor": "Solar peak time sensor"
         },
         "data_description": {
           "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
@@ -34,7 +37,10 @@
           "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W).",
           "outdoor_temp_sensor": "Optional outdoor temperature sensor used to decide when to auto-start heating.",
           "pv_power_sensor": "Optional PV inverter AC power sensor in watts (auto-discovers sensor.inverter_wirkleistung if omitted).",
-          "battery_power_sensor": "Optional signed home battery power sensor in watts (negative = charging, positive = discharging)."
+          "battery_power_sensor": "Optional signed home battery power sensor in watts (negative = charging, positive = discharging).",
+          "water_heater_entity": "Optional domestic hot water heat pump entity (auto-discovers water_heater.wassererhitzer_2 if omitted).",
+          "water_temp_sensor": "Optional hot water temperature sensor in Celsius (auto-discovers sensor.wassererhitzer_hot_water_temperature if omitted).",
+          "solar_peak_time_sensor": "Optional daily solar peak timestamp sensor (auto-discovers sensor.power_highest_peak_time_today if omitted)."
         }
       },
       "reconfigure": {
@@ -54,7 +60,10 @@
           "climate_entity": "Multisplit AC climate entity",
           "outdoor_temp_sensor": "Outdoor temperature sensor",
           "pv_power_sensor": "PV inverter power sensor",
-          "battery_power_sensor": "Home battery net power sensor"
+          "battery_power_sensor": "Home battery net power sensor",
+          "water_heater_entity": "Hot water heat pump entity",
+          "water_temp_sensor": "Hot water temperature sensor",
+          "solar_peak_time_sensor": "Solar peak time sensor"
         },
         "data_description": {
           "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
@@ -70,7 +79,10 @@
           "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W).",
           "outdoor_temp_sensor": "Optional outdoor temperature sensor used to decide when to auto-start heating.",
           "pv_power_sensor": "Optional PV inverter AC power sensor in watts (auto-discovers sensor.inverter_wirkleistung if omitted).",
-          "battery_power_sensor": "Optional signed home battery power sensor in watts (negative = charging, positive = discharging)."
+          "battery_power_sensor": "Optional signed home battery power sensor in watts (negative = charging, positive = discharging).",
+          "water_heater_entity": "Optional domestic hot water heat pump entity (auto-discovers water_heater.wassererhitzer_2 if omitted).",
+          "water_temp_sensor": "Optional hot water temperature sensor in Celsius (auto-discovers sensor.wassererhitzer_hot_water_temperature if omitted).",
+          "solar_peak_time_sensor": "Optional daily solar peak timestamp sensor (auto-discovers sensor.power_highest_peak_time_today if omitted)."
         }
       }
     },
@@ -103,6 +115,9 @@
     "invalid_charging_mode": {
       "message": "{mode} is not a supported charging mode."
     },
+    "invalid_priority_order": {
+      "message": "{order} is not a supported priority order."
+    },
     "entry_not_found": {
       "message": "No configuration entry of this integration matches {target}."
     },
@@ -118,6 +133,9 @@
       "ac_buffer_active": {
         "name": "Thermal AC buffer active"
       },
+      "dhw_active": {
+        "name": "Hot water heat pump active"
+      },
       "ev_session_active": {
         "name": "EV charging session active"
       }
@@ -131,6 +149,18 @@
       },
       "home_power_watts": {
         "name": "Home power consumption"
+      },
+      "daily_home_kwh": {
+        "name": "Daily home energy consumption"
+      },
+      "daily_pv_kwh": {
+        "name": "Daily PV energy generation"
+      },
+      "daily_grid_import_kwh": {
+        "name": "Daily grid energy import"
+      },
+      "daily_grid_export_kwh": {
+        "name": "Daily grid energy export"
       },
       "ev_charging_power": {
         "name": "EV charging power"
@@ -191,6 +221,18 @@
       "ac_auto_heat_max_outdoor_temp": {
         "name": "AC auto-heat maximum outdoor temperature"
       },
+      "dhw_min_surplus_watts": {
+        "name": "Hot water minimum surplus power"
+      },
+      "dhw_target_temp": {
+        "name": "Hot water PV target temperature"
+      },
+      "dhw_stop_temp": {
+        "name": "Hot water grid-import stop temperature"
+      },
+      "dhw_min_temp": {
+        "name": "Hot water winter minimum temperature"
+      },
       "ev_min_surplus_watts": {
         "name": "EV minimum surplus power"
       },
@@ -209,6 +251,15 @@
           "pv_surplus": "PV Surplus",
           "fast": "Fast Charge"
         }
+      },
+      "priority_order": {
+        "name": "Surplus consumer priority order",
+        "state": {
+          "dhw_ev_ac": "Water heater → EV → AC buffer",
+          "ev_dhw_ac": "EV → Water heater → AC buffer",
+          "dhw_ac_ev": "Water heater → AC buffer → EV",
+          "ev_ac_dhw": "EV → AC buffer → Water heater"
+        }
       }
     },
     "switch": {
@@ -217,6 +268,9 @@
       },
       "ac_auto_heat_enabled": {
         "name": "AC auto-start heating when off"
+      },
+      "dhw_enabled": {
+        "name": "Hot water heat pump auto control"
       }
     }
   },

@@ -32,6 +32,12 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerSwitchEntityDescription, ...] = (
         value_fn=lambda data: data.get("ac_auto_heat_enabled"),
         set_fn=lambda coord, val: coord.async_set_ac_auto_heat_enabled(enabled=val),
     ),
+    EnergiemanagerSwitchEntityDescription(
+        key="dhw_enabled",
+        translation_key="dhw_enabled",
+        value_fn=lambda data: data.get("dhw_enabled"),
+        set_fn=lambda coord, val: coord.async_set_dhw_enabled(enabled=val),
+    ),
 )
 
 

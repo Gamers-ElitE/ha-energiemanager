@@ -27,6 +27,7 @@ from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TUR
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 
 
 async def test_entities_read_the_coordinator_payload(
@@ -239,6 +240,8 @@ async def test_ac_buffer_shifts_and_restores_climate_temperature(
         "heat",
         {"temperature": 20.0, "min_temp": 10.0, "max_temp": 31.0},
     )
+    # EV unplugged so AC buffer gets surplus without EV taking priority
+    hass.states.async_set("binary_sensor.tesla_plugged", "off")
     # From initial -2000 W, a 0 W reading yields EMA = -1300 W (1300 W surplus, inside 500-1350 W window)
     hass.states.async_set("sensor.grid_power", "0")
 
@@ -320,6 +323,7 @@ async def test_ac_auto_heat_starts_when_off_and_cold_outside_and_restores_off(
         "off",
         {"temperature": 21.0, "min_temp": 10.0, "max_temp": 31.0},
     )
+    hass.states.async_set("binary_sensor.tesla_plugged", "off")
     hass.states.async_set("sensor.multisplit_outdoor", "8.0")
     hass.states.async_set("sensor.grid_power", "0")
 
@@ -383,3 +387,134 @@ async def test_home_power_calculation_synchronizes_fast_grid_with_10s_inverter_a
     assert home_state.attributes["pv_power_watts"] == 2800.0
     assert home_state.attributes["battery_power_watts"] == -1600.0
     assert home_state.attributes["home_power_total_watts"] == 1200.0
+
+
+async def test_dhw_heat_pump_pv_surplus_and_min_temp_winter_boost(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DHW heat pump turns on with PV surplus (10-18h) and forces heat_pump below 42°C at solar peak."""
+    wh_calls: list[ServiceCall] = []
+    hass.services.async_register("water_heater", "set_operation_mode", wh_calls.append)
+
+    # Set up both LG water heater variants (one with 'vacation', one with 'off')
+    hass.states.async_set(
+        "water_heater.wassererhitzer_2",
+        "vacation",
+        {
+            "operation_list": ["heat_pump", "eco", "performance", "vacation"],
+            "operation_mode": "vacation",
+            "current_temperature": 46.0,
+        },
+    )
+    hass.states.async_set(
+        "water_heater.wassererhitzer",
+        "off",
+        {
+            "operation_list": ["eco", "heat_pump", "performance", "off"],
+            "operation_mode": "off",
+            "current_temperature": 46.0,
+        },
+    )
+    hass.states.async_set("sensor.wassererhitzer_hot_water_temperature", "46.0")
+    hass.states.async_set("sensor.wassererhitzer_energy_current", "480")
+
+    daytime = datetime(2026, 6, 15, 12, 30, 0, tzinfo=UTC)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: daytime)
+    monkeypatch.setattr(dt_util, "as_local", lambda dt: dt)
+
+    # Surplus starts at 850 W (> 500 W threshold) and water temp is 46 °C (< 53 °C target)
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.energiemanager_hot_water_heat_pump_active").state == "on"
+    assert len(wh_calls) == 2
+    assert {c.data["operation_mode"] for c in wh_calls} == {"heat_pump"}
+
+    # Simulate water heaters now in heat_pump mode, then grid import > 200 W with water temp > 51 °C -> turns off
+    wh_calls.clear()
+    hass.states.async_set(
+        "water_heater.wassererhitzer_2",
+        "heat_pump",
+        {"operation_list": ["heat_pump", "eco", "performance", "vacation"], "operation_mode": "heat_pump"},
+    )
+    hass.states.async_set(
+        "water_heater.wassererhitzer",
+        "heat_pump",
+        {"operation_list": ["eco", "heat_pump", "performance", "off"], "operation_mode": "heat_pump"},
+    )
+    hass.states.async_set("sensor.wassererhitzer_hot_water_temperature", "52.0")
+    await init_integration.runtime_data.coordinator.async_set_parameter("ema_alpha", 1.0, refresh=False)
+    hass.states.async_set("sensor.grid_power", "350")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.energiemanager_hot_water_heat_pump_active").state == "off"
+    modes_by_entity = {c.data[ATTR_ENTITY_ID]: c.data["operation_mode"] for c in wh_calls}
+    assert modes_by_entity["water_heater.wassererhitzer_2"] == "vacation"
+    assert modes_by_entity["water_heater.wassererhitzer"] == "off"
+
+    # Winter minimum-temperature boost (< 42 °C at/after solar peak time) forces heating even during grid import
+    wh_calls.clear()
+    hass.states.async_set("sensor.wassererhitzer_hot_water_temperature", "39.5")
+    hass.states.async_set("sensor.power_highest_peak_time_today", "2026-06-15T12:00:00+00:00")
+    hass.states.async_set(
+        "water_heater.wassererhitzer_2",
+        "vacation",
+        {"operation_list": ["heat_pump", "eco", "performance", "vacation"], "operation_mode": "vacation"},
+    )
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    dhw_bs = hass.states.get("binary_sensor.energiemanager_hot_water_heat_pump_active")
+    assert dhw_bs.state == "on"
+    assert dhw_bs.attributes["dhw_forced_min_temp"] is True
+    assert dhw_bs.attributes["dhw_reason"] == "min_temp_boost"
+
+
+async def test_consumer_priority_order_select_and_cascade_yielding(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """EV has priority over AC buffer in default dhw_ev_ac order, and priority order can be changed via select."""
+    prio_select = hass.states.get("select.energiemanager_surplus_consumer_priority_order")
+    assert prio_select is not None
+    assert prio_select.state == "dhw_ev_ac"
+
+    # Turn on AC buffer and auto-heat
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: "switch.energiemanager_thermal_ac_buffer_enabled"},
+        blocking=True,
+    )
+
+    # In default dhw_ev_ac order: EV can charge at 1400 W surplus (>= 1380 W threshold),
+    # so AC buffer yields and stays off!
+    await init_integration.runtime_data.coordinator.async_set_parameter(
+        "ac_buffer_max_surplus_watts", 1500.0, refresh=False
+    )
+    await init_integration.runtime_data.coordinator.async_set_parameter("ema_alpha", 1.0, refresh=False)
+    hass.states.async_set("sensor.grid_power", "-1400")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # AC buffer yielded to EV
+    assert hass.states.get("binary_sensor.energiemanager_thermal_ac_buffer_active").state == "off"
+
+    # Switch priority order to dhw_ac_ev (where AC has priority over EV)
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {
+            ATTR_ENTITY_ID: "select.energiemanager_surplus_consumer_priority_order",
+            ATTR_OPTION: "dhw_ac_ev",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert init_integration.runtime_data.coordinator.priority_order == "dhw_ac_ev"
+    # Now in dhw_ac_ev, AC buffer does not yield to EV and turns on in 500-1500 W surplus window
+    assert hass.states.get("binary_sensor.energiemanager_thermal_ac_buffer_active").state == "on"

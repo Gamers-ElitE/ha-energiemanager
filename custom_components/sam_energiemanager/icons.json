@@ -7,6 +7,9 @@
       "ac_buffer_active": {
         "default": "mdi:snowflake-thermometer"
       },
+      "dhw_active": {
+        "default": "mdi:water-boiler"
+      },
       "ev_session_active": {
         "default": "mdi:ev-plug-type2"
       }
@@ -20,6 +23,18 @@
       },
       "home_power_watts": {
         "default": "mdi:home-lightning-bolt"
+      },
+      "daily_home_kwh": {
+        "default": "mdi:home-analytics"
+      },
+      "daily_pv_kwh": {
+        "default": "mdi:solar-power-variant"
+      },
+      "daily_grid_import_kwh": {
+        "default": "mdi:transmission-tower-import"
+      },
+      "daily_grid_export_kwh": {
+        "default": "mdi:transmission-tower-export"
       },
       "ev_charging_power": {
         "default": "mdi:ev-station"
@@ -80,6 +95,18 @@
       "ac_auto_heat_max_outdoor_temp": {
         "default": "mdi:home-thermometer-outline"
       },
+      "dhw_min_surplus_watts": {
+        "default": "mdi:water-boiler-auto"
+      },
+      "dhw_target_temp": {
+        "default": "mdi:thermometer-water"
+      },
+      "dhw_stop_temp": {
+        "default": "mdi:thermometer-check"
+      },
+      "dhw_min_temp": {
+        "default": "mdi:thermometer-low"
+      },
       "ev_min_surplus_watts": {
         "default": "mdi:flash-outline"
       },
@@ -98,6 +125,9 @@
           "pv_surplus": "mdi:weather-sunny",
           "fast": "mdi:flash"
         }
+      },
+      "priority_order": {
+        "default": "mdi:sort-variant"
       }
     },
     "switch": {
@@ -111,6 +141,12 @@
         "default": "mdi:fire-auto",
         "state": {
           "off": "mdi:fire-off"
+        }
+      },
+      "dhw_enabled": {
+        "default": "mdi:water-boiler-auto",
+        "state": {
+          "off": "mdi:water-boiler-off"
         }
       }
     }
