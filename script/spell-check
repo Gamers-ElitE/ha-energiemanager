@@ -25,7 +25,7 @@ run_hook "spell-check" "pre"
 
 log_header "Checking spelling with codespell"
 codespell \
-    --ignore-words-list=aiport,astroid,checkin,currenty,hass,iif,incomfort,lookin,nam,NotIn \
+    --ignore-words-list=aiport,alle,als,astroid,checkin,currenty,exponentiell,hass,iif,incomfort,ist,lokale,lokales,lookin,nam,negativ,NotIn,oder,positiv,unter,vor \
     --skip="./.*,*.csv,*.json,*.ambr,uv.lock" \
     --quiet-level=2 \
     custom_components/ \

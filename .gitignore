@@ -19,6 +19,7 @@ node_modules/
 
 # AI agent temporary scratch files and planning notes
 .agents/scratch/
+temp_*.txt
 
 # Runtime artifact created by the template-sync workflow (never commit)
 .templatesyncignore.runtime

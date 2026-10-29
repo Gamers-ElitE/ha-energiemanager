@@ -21,13 +21,13 @@ from custom_components.sam_energiemanager.const import (
 from homeassistant.helpers import selector
 
 _POWER_SENSOR_SELECTOR = selector.EntitySelector(
-    selector.EntitySelectorConfig(domain="sensor", device_class="power"),
+    selector.EntitySelectorConfig(domain="sensor"),
 )
 _BATTERY_SENSOR_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="sensor", device_class="battery"),
 )
 _SWITCH_SELECTOR = selector.EntitySelector(
-    selector.EntitySelectorConfig(domain="switch"),
+    selector.EntitySelectorConfig(domain=["switch", "input_boolean", "select"]),
 )
 _BINARY_OR_SENSOR_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain=["binary_sensor", "sensor"]),

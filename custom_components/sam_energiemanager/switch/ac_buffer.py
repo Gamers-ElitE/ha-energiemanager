@@ -41,4 +41,3 @@ class EnergiemanagerSwitch(SwitchEntity, EnergiemanagerEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable the thermal AC buffer."""
         await self.coordinator.async_set_ac_buffer_enabled(enabled=False)
-

@@ -76,8 +76,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._ac_buffer_activated_at: datetime | None = None
         self.session_tracker = SessionTracker()
 
-    def _read_float(self, conf_key: str, default: float | None = None) -> float | None:
-        """Read a numeric state from a configured entity ID."""
+    def _read_float(self, conf_key: str, default: float | None = None, *, as_watts: bool = False) -> float | None:
+        """Read a numeric state from a configured entity ID, converting kW to W when requested."""
         entity_id = self.config_entry.data.get(conf_key)
         if not entity_id:
             return default
@@ -85,9 +85,12 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return default
         try:
-            return float(state.state)
+            val = float(state.state)
         except TypeError, ValueError:
             return default
+        if as_watts and str(state.attributes.get("unit_of_measurement", "")).lower() == "kw":
+            return val * 1000.0
+        return val
 
     def _read_bool(self, conf_key: str, *, default: bool = False) -> bool:
         """Read a boolean state from a configured entity ID."""
@@ -115,9 +118,9 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         )
         self._last_update_utc = now_utc
 
-        grid_raw = self._read_float(CONF_GRID_POWER_SENSOR, 0.0) or 0.0
+        grid_raw = self._read_float(CONF_GRID_POWER_SENSOR, 0.0, as_watts=True) or 0.0
         battery_soc = self._read_float(CONF_BATTERY_SOC_SENSOR)
-        ev_power = self._read_float(CONF_EV_POWER_SENSOR, 0.0) or 0.0
+        ev_power = self._read_float(CONF_EV_POWER_SENSOR, 0.0, as_watts=True) or 0.0
         ev_soc = self._read_float(CONF_EV_SOC_SENSOR)
         ev_ble_connected = self._read_bool(CONF_EV_BLE_CONNECTED_BINARY_SENSOR, default=True)
 
@@ -285,23 +288,35 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         await self._async_sync_ev_actuators()
 
     async def _async_sync_battery_lock(self) -> None:
-        """Synchronize the physical home battery discharge lock switch if configured."""
-        switch_id = self.config_entry.data.get(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
-        if not switch_id or self.hass.states.get(switch_id) is None:
+        """Synchronize the physical home battery discharge lock entity if configured."""
+        entity_id = self.config_entry.data.get(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
+        if not entity_id or self.hass.states.get(entity_id) is None:
+            return
+        domain = entity_id.split(".", 1)[0]
+        if domain == "select":
+            state = self.hass.states.get(entity_id)
+            target_option = "charge" if self._battery_lock_active else "discharge"
+            if state is not None and state.state != target_option:
+                await self.hass.services.async_call(
+                    "select",
+                    "select_option",
+                    {ATTR_ENTITY_ID: entity_id, "option": target_option},
+                    blocking=False,
+                )
             return
         is_currently_on = self._read_bool(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
         if self._battery_lock_active and not is_currently_on:
             await self.hass.services.async_call(
-                "switch",
+                domain,
                 SERVICE_TURN_ON,
-                {ATTR_ENTITY_ID: switch_id},
+                {ATTR_ENTITY_ID: entity_id},
                 blocking=False,
             )
         elif not self._battery_lock_active and is_currently_on:
             await self.hass.services.async_call(
-                "switch",
+                domain,
                 SERVICE_TURN_OFF,
-                {ATTR_ENTITY_ID: switch_id},
+                {ATTR_ENTITY_ID: entity_id},
                 blocking=False,
             )
 

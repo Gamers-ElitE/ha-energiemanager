@@ -167,4 +167,3 @@ class SessionTracker:
             self.start_time = None
 
         return ev_solar_w, ev_grid_w, completed_event
-

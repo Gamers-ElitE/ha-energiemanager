@@ -85,4 +85,3 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerSensorEntityDescription, ...] = (
         attr_fn=lambda data: data.get("last_session_data", {}),
     ),
 )
-

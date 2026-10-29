@@ -207,3 +207,19 @@ async def test_session_completed_event_fired(
     assert len(events) == 1
     assert "energy_total_kwh" in events[0].data
     assert "solar_percentage" in events[0].data
+
+
+async def test_kw_power_sensor_auto_converts_to_watts(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Power sensors reporting in kW (like Tesla BLE charger_power) are converted to W."""
+    hass.states.async_set(
+        "sensor.tesla_charging_power",
+        "2.3",
+        {"unit_of_measurement": "kW"},
+    )
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.energiemanager_ev_charging_power").state == "2300.0"

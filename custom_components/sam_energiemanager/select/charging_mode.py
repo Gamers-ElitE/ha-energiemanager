@@ -24,4 +24,3 @@ class EnergiemanagerChargingModeSelect(SelectEntity, EnergiemanagerEntity):
     async def async_select_option(self, option: str) -> None:
         """Set the charging mode on the coordinator."""
         await self.coordinator.async_set_charging_mode(option)
-

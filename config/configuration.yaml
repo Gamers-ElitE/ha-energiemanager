@@ -141,3 +141,309 @@ logger:
 
     # Your integration debug logging - shows EVERYTHING from your integration
     custom_components.sam_energiemanager: debug
+
+# ------------------------------------------------------------------------------
+# Local Simulation Testbed for SAM Energiemanager
+# Adjust the input_number / input_boolean sliders in the UI to test the cascade.
+# ------------------------------------------------------------------------------
+input_number:
+  sim_grid_power:
+    name: "Sim: Netzzähler Leistung"
+    min: -4000
+    max: 4000
+    step: 50
+    initial: -2000
+    unit_of_measurement: "W"
+    mode: slider
+    icon: mdi:transmission-tower
+  sim_anker_battery_soc:
+    name: "Sim: Anker Solarbank SOC"
+    min: 0
+    max: 100
+    step: 5
+    initial: 75
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:home-battery
+  sim_tesla_charging_power:
+    name: "Sim: Tesla Ladeleistung"
+    min: 0
+    max: 3680
+    step: 50
+    initial: 0
+    unit_of_measurement: "W"
+    mode: slider
+    icon: mdi:ev-station
+  sim_tesla_soc:
+    name: "Sim: Tesla Akku SOC"
+    min: 0
+    max: 100
+    step: 5
+    initial: 55
+    unit_of_measurement: "%"
+    mode: slider
+    icon: mdi:car-electric
+  sim_tesla_charging_amps:
+    name: "Sim: Tesla Ladestrom (BLE)"
+    min: 6
+    max: 16
+    step: 1
+    initial: 13
+    unit_of_measurement: "A"
+    mode: slider
+    icon: mdi:current-ac
+  sim_room_temperature:
+    name: "Sim: Raumtemperatur"
+    min: 15
+    max: 30
+    step: 0.5
+    initial: 21
+    unit_of_measurement: "°C"
+    mode: slider
+    icon: mdi:thermometer
+
+input_boolean:
+  sim_anker_discharge_disabled:
+    name: "Sim: Anker Entladesperre"
+    initial: false
+    icon: mdi:battery-lock
+  sim_tesla_plugged:
+    name: "Sim: Tesla Stecker verbunden"
+    initial: true
+    icon: mdi:power-plug
+  sim_tesla_ble_connected:
+    name: "Sim: Tesla BLE verbunden"
+    initial: true
+    icon: mdi:bluetooth-connect
+  sim_tesla_charger:
+    name: "Sim: Tesla Ladeschalter"
+    initial: false
+    icon: mdi:ev-plug-type2
+  sim_ac_heater_switch:
+    name: "Sim: Multisplit Kompressor"
+    initial: false
+    icon: mdi:air-conditioner
+
+template:
+  - sensor:
+      - name: "Tasmota SM 16_7_0_leistung"
+        unique_id: sim_tasmota_sm_16_7_0_leistung
+        default_entity_id: sensor.tasmota_sm_16_7_0_leistung
+        state_class: measurement
+        state: "{{ states('input_number.sim_grid_power') | float(0) }}"
+      - name: "Grid Power"
+        unique_id: sim_grid_power_sensor
+        default_entity_id: sensor.grid_power
+        device_class: power
+        state_class: measurement
+        unit_of_measurement: "W"
+        state: "{{ states('input_number.sim_grid_power') | float(0) }}"
+      - name: "Solarbank Max AC SOC"
+        unique_id: sim_anker_solix_solarbank_max_ac_345_soc
+        default_entity_id: sensor.anker_solix_solarbank_max_ac_345_soc
+        device_class: battery
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: "{{ states('input_number.sim_anker_battery_soc') | float(75) }}"
+      - name: "Battery SOC"
+        unique_id: sim_battery_soc_sensor
+        default_entity_id: sensor.battery_soc
+        device_class: battery
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: "{{ states('input_number.sim_anker_battery_soc') | float(75) }}"
+      - name: "Tesla Ladeleistung"
+        unique_id: sim_tesla_ladeleistung
+        default_entity_id: sensor.tesla_ladeleistung
+        device_class: power
+        state_class: measurement
+        unit_of_measurement: "W"
+        state: "{{ states('input_number.sim_tesla_charging_power') | float(0) }}"
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Charger Power"
+        unique_id: sim_tesla_ble_charger_power_kw
+        default_entity_id: sensor.tesla_ble_lrw3e7fs1rc955673_charger_power
+        device_class: power
+        state_class: measurement
+        unit_of_measurement: "kW"
+        state: "{{ (states('input_number.sim_tesla_charging_power') | float(0) / 1000) | round(2) }}"
+      - name: "Tesla Charging Power"
+        unique_id: sim_tesla_charging_power_sensor
+        default_entity_id: sensor.tesla_charging_power
+        device_class: power
+        state_class: measurement
+        unit_of_measurement: "W"
+        state: "{{ states('input_number.sim_tesla_charging_power') | float(0) }}"
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Battery Level"
+        unique_id: sim_tesla_ble_battery_level
+        default_entity_id: sensor.tesla_ble_lrw3e7fs1rc955673_battery_level
+        device_class: battery
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: "{{ states('input_number.sim_tesla_soc') | float(55) }}"
+      - name: "Tesla SOC"
+        unique_id: sim_tesla_soc_sensor
+        default_entity_id: sensor.tesla_soc
+        device_class: battery
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: "{{ states('input_number.sim_tesla_soc') | float(55) }}"
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Charge Cable"
+        unique_id: sim_tesla_ble_charge_cable
+        default_entity_id: sensor.tesla_ble_lrw3e7fs1rc955673_charge_cable
+        state: "{{ 'connected' if is_state('input_boolean.sim_tesla_plugged', 'on') else 'disconnected' }}"
+      - name: "Sim Room Temperature"
+        unique_id: sim_room_temperature_sensor
+        default_entity_id: sensor.sim_room_temperature
+        device_class: temperature
+        state_class: measurement
+        unit_of_measurement: "°C"
+        state: "{{ states('input_number.sim_room_temperature') | float(21) }}"
+  - binary_sensor:
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Presence"
+        unique_id: sim_tesla_ble_presence
+        default_entity_id: binary_sensor.tesla_ble_lrw3e7fs1rc955673_presence
+        device_class: presence
+        state: "{{ is_state('input_boolean.sim_tesla_ble_connected', 'on') }}"
+      - name: "Tesla Plugged"
+        unique_id: sim_tesla_plugged_binary_sensor
+        default_entity_id: binary_sensor.tesla_plugged
+        device_class: plug
+        state: "{{ is_state('input_boolean.sim_tesla_plugged', 'on') }}"
+      - name: "Tesla BLE Connected"
+        unique_id: sim_tesla_ble_connected_binary_sensor
+        default_entity_id: binary_sensor.tesla_ble_connected
+        device_class: connectivity
+        state: "{{ is_state('input_boolean.sim_tesla_ble_connected', 'on') }}"
+  - select:
+      - name: "Solarbank Max AC Leistungsfluss"
+        unique_id: sim_anker_solix_solarbank_max_ac_345_leistungsfluss
+        default_entity_id: select.anker_solix_solarbank_max_ac_345_leistungsfluss
+        options: "{{ ['charge', 'discharge'] }}"
+        state: "{{ 'charge' if is_state('input_boolean.sim_anker_discharge_disabled', 'on') else 'discharge' }}"
+        select_option:
+          - action: "{{ 'input_boolean.turn_on' if option == 'charge' else 'input_boolean.turn_off' }}"
+            target:
+              entity_id: input_boolean.sim_anker_discharge_disabled
+  - switch:
+      - name: "Anker Discharge Disabled"
+        unique_id: sim_anker_discharge_disabled_switch
+        default_entity_id: switch.anker_discharge_disabled
+        state: "{{ is_state('input_boolean.sim_anker_discharge_disabled', 'on') }}"
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.sim_anker_discharge_disabled
+        turn_off:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.sim_anker_discharge_disabled
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Charger"
+        unique_id: sim_tesla_ble_charger_switch
+        default_entity_id: switch.tesla_ble_lrw3e7fs1rc955673_charger
+        state: "{{ is_state('input_boolean.sim_tesla_charger', 'on') }}"
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.sim_tesla_charger
+        turn_off:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.sim_tesla_charger
+      - name: "Tesla Charger"
+        unique_id: sim_tesla_charger_switch
+        default_entity_id: switch.tesla_charger
+        state: "{{ is_state('input_boolean.sim_tesla_charger', 'on') }}"
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.sim_tesla_charger
+        turn_off:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.sim_tesla_charger
+  - number:
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Charging Current"
+        unique_id: sim_tesla_ble_charging_current_number
+        default_entity_id: number.tesla_ble_lrw3e7fs1rc955673_charging_current
+        device_class: current
+        unit_of_measurement: "A"
+        min: 0
+        max: 32
+        step: 1
+        state: "{{ states('input_number.sim_tesla_charging_amps') | int(13) }}"
+        set_value:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.sim_tesla_charging_amps
+            data:
+              value: "{{ value }}"
+      - name: "Tesla Charging Amps"
+        unique_id: sim_tesla_charging_amps_number
+        default_entity_id: number.tesla_charging_amps
+        device_class: current
+        unit_of_measurement: "A"
+        min: 6
+        max: 16
+        step: 1
+        state: "{{ states('input_number.sim_tesla_charging_amps') | int(13) }}"
+        set_value:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.sim_tesla_charging_amps
+            data:
+              value: "{{ value }}"
+  - button:
+      - name: "Tesla_BLE_LRW3E7FS1RC955673 Wake up car"
+        unique_id: sim_tesla_ble_wake_up_car_button
+        default_entity_id: button.tesla_ble_lrw3e7fs1rc955673_wake_up_car
+        press:
+          - action: logbook.log
+            data:
+              name: "Tesla Wake Up"
+              message: "Simulated BLE wake-up triggered"
+      - name: "Tesla Wake Up"
+        unique_id: sim_tesla_wake_up_button
+        default_entity_id: button.tesla_wake_up
+        press:
+          - action: logbook.log
+            data:
+              name: "Tesla Wake Up"
+              message: "Simulated BLE wake-up triggered"
+
+climate:
+  - platform: generic_thermostat
+    name: "Klima Esszimmer"
+    unique_id: sim_klima_esszimmer
+    heater: input_boolean.sim_ac_heater_switch
+    target_sensor: sensor.sim_room_temperature
+    min_temp: 10
+    max_temp: 31
+    target_temp: 20
+    precision: 0.5
+  - platform: generic_thermostat
+    name: "Klima Büro"
+    unique_id: sim_klima_buro
+    heater: input_boolean.sim_ac_heater_switch
+    target_sensor: sensor.sim_room_temperature
+    min_temp: 10
+    max_temp: 31
+    target_temp: 20
+    precision: 0.5
+  - platform: generic_thermostat
+    name: "Klima Schlafzimmer"
+    unique_id: sim_klima_schlafzimmer
+    heater: input_boolean.sim_ac_heater_switch
+    target_sensor: sensor.sim_room_temperature
+    min_temp: 10
+    max_temp: 31
+    target_temp: 19.5
+    precision: 0.5
+  - platform: generic_thermostat
+    name: "Multisplit"
+    unique_id: sim_multisplit_climate
+    heater: input_boolean.sim_ac_heater_switch
+    target_sensor: sensor.sim_room_temperature
+    min_temp: 16
+    max_temp: 28
+    target_temp: 21
+    precision: 0.5
