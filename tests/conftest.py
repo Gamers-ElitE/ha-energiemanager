@@ -7,6 +7,7 @@ from custom_components.sam_energiemanager.const import (
     CONF_BATTERY_DISCHARGE_LOCK_SWITCH,
     CONF_BATTERY_SOC_SENSOR,
     CONF_CLIMATE_ENTITY,
+    CONF_EV_AWAKE_BINARY_SENSOR,
     CONF_EV_BLE_CONNECTED_BINARY_SENSOR,
     CONF_EV_CHARGING_SWITCH,
     CONF_EV_CURRENT_NUMBER,
@@ -43,6 +44,7 @@ def config_entry() -> MockConfigEntry:
             CONF_EV_CURRENT_NUMBER: "number.tesla_charging_amps",
             CONF_EV_CHARGING_SWITCH: "switch.tesla_charger",
             CONF_EV_WAKEUP_BUTTON: "button.tesla_wake_up",
+            CONF_EV_AWAKE_BINARY_SENSOR: "binary_sensor.tesla_awake",
             CONF_CLIMATE_ENTITY: "climate.multisplit",
         },
     )
@@ -67,6 +69,7 @@ async def init_integration(
     hass.states.async_set("sensor.tesla_soc", "55")
     hass.states.async_set("binary_sensor.tesla_plugged", "on")
     hass.states.async_set("binary_sensor.tesla_ble_connected", "on")
+    hass.states.async_set("binary_sensor.tesla_awake", "on")
 
     config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(config_entry.entry_id)

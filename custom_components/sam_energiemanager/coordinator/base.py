@@ -1,5 +1,6 @@
 """Data update coordinator for sam_energiemanager."""
 
+import asyncio
 from collections.abc import Callable
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,7 @@ from custom_components.sam_energiemanager.const import (
     CONF_BATTERY_SOC_SENSOR,
     CONF_CLIMATE_ENTITY,
     CONF_ELECTRICITY_PRICE,
+    CONF_EV_AWAKE_BINARY_SENSOR,
     CONF_EV_BLE_CONNECTED_BINARY_SENSOR,
     CONF_EV_CHARGING_SWITCH,
     CONF_EV_CURRENT_NUMBER,
@@ -38,6 +40,7 @@ from custom_components.sam_energiemanager.const import (
     DEADBAND_WATTS,
     DEFAULT_BATTERY_RESERVE_SOC,
     DEFAULT_ELECTRICITY_PRICE,
+    DEFAULT_EV_WAKEUP_DELAY_SECONDS,
     DEFAULT_PRIORITY_ORDER,
     DEFAULT_TESLA_MAX_CURRENT,
     DEFAULT_TESLA_TARGET_SOC,
@@ -117,6 +120,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self.ac_auto_heat_max_outdoor_temp: float = AC_AUTO_HEAT_MAX_OUTDOOR_TEMP
         self.ev_min_surplus_watts: float = EV_MIN_SURPLUS_WATTS
         self.ev_cloud_hysteresis_seconds: float = EV_CLOUD_HYSTERESIS_SECONDS
+        self.ev_wakeup_delay_seconds: float = DEFAULT_EV_WAKEUP_DELAY_SECONDS
         self.electricity_price: float = float(
             self.config_entry.options.get(CONF_ELECTRICITY_PRICE, DEFAULT_ELECTRICITY_PRICE)
         )
@@ -492,6 +496,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "ac_auto_heat_max_outdoor_temp": self.ac_auto_heat_max_outdoor_temp,
             "ev_min_surplus_watts": self.ev_min_surplus_watts,
             "ev_cloud_hysteresis_seconds": self.ev_cloud_hysteresis_seconds,
+            "ev_wakeup_delay_seconds": self.ev_wakeup_delay_seconds,
             "electricity_price": self.electricity_price,
             "action_tracing_enabled": self.action_tracing_enabled,
             "action_traces": list(self._recent_traces),
@@ -912,6 +917,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         if self._ev_charging_active and not was_charging:
             await self._async_trigger_ev_wakeup()
+            await self._async_wait_for_ev_awake()
 
         await self._async_sync_ev_actuators()
 
@@ -977,6 +983,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         """Press the BLE wake-up button before starting a charging session."""
         button_id = self.config_entry.data.get(CONF_EV_WAKEUP_BUTTON)
         if button_id and self.hass.states.get(button_id) is not None:
+            if not self.hass.services.has_service("button", "press"):
+                return
             await self.hass.services.async_call(
                 "button",
                 "press",
@@ -989,6 +997,95 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 reason="Ladevorgang beginnt (Fahrzeug wird aufgeweckt)",
                 target=button_id,
                 value="press",
+            )
+
+    def resolve_ev_awake_entity(self) -> str | None:
+        """Return configured or auto-discovered EV awake binary sensor."""
+        configured = self.config_entry.data.get(CONF_EV_AWAKE_BINARY_SENSOR)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        # Try to infer from wakeup button or charger switch entity ID
+        for ref_key in (CONF_EV_WAKEUP_BUTTON, CONF_EV_CHARGING_SWITCH):
+            ref_entity = self.config_entry.data.get(ref_key)
+            if not ref_entity:
+                continue
+            base = ref_entity.split(".", 1)[-1]
+            for suffix in ("_wake_up_car", "_wakeup_button", "_charger", "_charging"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            candidate = f"binary_sensor.{base}_awake"
+            if self.hass.states.get(candidate) is not None:
+                return candidate
+
+        # Fallback check for test / standard entity
+        for fallback in ("binary_sensor.tesla_awake", "binary_sensor.ev_awake"):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    def _is_ev_awake(self, awake_entity: str | None = None) -> bool:
+        """Check whether the EV is currently awake."""
+        entity_id = awake_entity or self.resolve_ev_awake_entity()
+        if entity_id:
+            state = self.hass.states.get(entity_id)
+            if state is not None:
+                if state.state.lower() in ("on", "true", "1"):
+                    return True
+                if state.state.lower() in ("off", "false", "0"):
+                    return False
+
+        # If no awake sensor, or state unknown, check if car is already actively drawing charging power
+        ev_power = self._read_float(CONF_EV_POWER_SENSOR)
+        if ev_power is not None and ev_power > 100.0:
+            return True
+
+        return False
+
+    async def _async_wait_for_ev_awake(self) -> None:
+        """Wait for the EV to wake up after a wake-up command, up to ev_wakeup_delay_seconds."""
+        awake_entity = self.resolve_ev_awake_entity()
+        max_wait = max(0.0, float(self.ev_wakeup_delay_seconds))
+        if max_wait <= 0:
+            return
+
+        # If already awake, proceed immediately
+        if self._is_ev_awake(awake_entity):
+            return
+
+        self.record_trace(
+            category="ev",
+            action=f"Warte auf Aufwachen des Fahrzeugs (max. {max_wait:.0f}s)",
+            reason="Fahrzeug schläft noch; Ladebefehle werden verzögert",
+            target=awake_entity or "timer",
+            value=f"{max_wait:.0f}s",
+        )
+
+        poll_interval = 0.5
+        elapsed = 0.0
+        while elapsed < max_wait:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+            if awake_entity and self._is_ev_awake(awake_entity):
+                await asyncio.sleep(0.5)
+                self.record_trace(
+                    category="ev",
+                    action=f"Fahrzeug ist wach ({elapsed:.1f}s)",
+                    reason="Awake-Sensor meldet 'on'; Ladevorgang wird freigegeben",
+                    target=awake_entity,
+                    value="on",
+                )
+                return
+
+        if not awake_entity:
+            self.record_trace(
+                category="ev",
+                action="Aufwach-Verzögerung abgelaufen",
+                reason=f"Feste Wartezeit ({max_wait:.0f}s) beendet; starte Ladevorgang",
+                target="timer",
+                value="done",
             )
 
     async def _async_sync_ev_actuators(self) -> None:

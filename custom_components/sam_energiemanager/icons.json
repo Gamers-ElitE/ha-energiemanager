@@ -116,6 +116,9 @@
       "ev_cloud_hysteresis_seconds": {
         "default": "mdi:weather-partly-cloudy"
       },
+      "ev_wakeup_delay_seconds": {
+        "default": "mdi:car-clock"
+      },
       "electricity_price": {
         "default": "mdi:currency-eur"
       }

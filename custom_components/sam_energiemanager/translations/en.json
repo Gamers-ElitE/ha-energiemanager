@@ -15,6 +15,7 @@
           "ev_current_number": "EV charging current number entity",
           "ev_charging_switch": "EV charging enable switch",
           "ev_wakeup_button": "EV BLE wake-up button",
+          "ev_awake_binary_sensor": "EV awake status binary sensor",
           "climate_entity": "Multisplit AC climate entity",
           "outdoor_temp_sensor": "Outdoor temperature sensor",
           "pv_power_sensor": "PV inverter power sensor",
@@ -34,6 +35,7 @@
           "ev_current_number": "Number entity controlling the 1-phase charging current setpoint (6-16 A).",
           "ev_charging_switch": "Switch entity to start or pause EV charging.",
           "ev_wakeup_button": "Button entity triggered to wake the vehicle before starting charging.",
+          "ev_awake_binary_sensor": "Optional binary sensor indicating whether the vehicle is awake before starting charging.",
           "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W).",
           "outdoor_temp_sensor": "Optional outdoor temperature sensor used to decide when to auto-start heating.",
           "pv_power_sensor": "Optional PV inverter AC power sensor in watts (auto-discovers sensor.inverter_wirkleistung if omitted).",
@@ -57,6 +59,7 @@
           "ev_current_number": "EV charging current number entity",
           "ev_charging_switch": "EV charging enable switch",
           "ev_wakeup_button": "EV BLE wake-up button",
+          "ev_awake_binary_sensor": "EV awake status binary sensor",
           "climate_entity": "Multisplit AC climate entity",
           "outdoor_temp_sensor": "Outdoor temperature sensor",
           "pv_power_sensor": "PV inverter power sensor",
@@ -76,6 +79,7 @@
           "ev_current_number": "Number entity controlling the 1-phase charging current setpoint (6-16 A).",
           "ev_charging_switch": "Switch entity to start or pause EV charging.",
           "ev_wakeup_button": "Button entity triggered to wake the vehicle before starting charging.",
+          "ev_awake_binary_sensor": "Optional binary sensor indicating whether the vehicle is awake before starting charging.",
           "climate_entity": "Climate entity used as a thermal buffer during medium PV surplus (500-1350 W).",
           "outdoor_temp_sensor": "Optional outdoor temperature sensor used to decide when to auto-start heating.",
           "pv_power_sensor": "Optional PV inverter AC power sensor in watts (auto-discovers sensor.inverter_wirkleistung if omitted).",
@@ -241,6 +245,9 @@
       },
       "ev_cloud_hysteresis_seconds": {
         "name": "EV cloud hysteresis delay"
+      },
+      "ev_wakeup_delay_seconds": {
+        "name": "EV wake-up delay"
       },
       "electricity_price": {
         "name": "Electricity tariff price"

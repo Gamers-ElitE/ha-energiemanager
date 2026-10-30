@@ -1066,6 +1066,16 @@ const _THRESHOLD_SECTIONS = [
         hint: 'Regelt bei Wolken bis auf 3 A herunter und stoppt erst nach dieser Zeit bei < 5 A & Netzbezug (Standard: 300 s = 5 min).',
       },
       {
+        key: 'ev_wakeup_delay_seconds',
+        label: 'Aufwach-Wartezeit (Wake-Up)',
+        unit: 's',
+        min: 1,
+        max: 60,
+        step: 1,
+        dec: 0,
+        hint: 'Wartezeit nach dem Wake-Up-Befehl vor dem Senden von Ladestrom und Startbefehl (Standard: 10 s). Bei aktivem Awake-Sensor wird vorzeitig freigegeben.',
+      },
+      {
         key: 'electricity_price',
         label: 'Netzstrompreis',
         unit: '€/kWh',
@@ -1231,6 +1241,11 @@ class SamEnergiemanagerPanel extends HTMLElement {
       dhw_min_temp: ['number.energiemanager_hot_water_winter_minimum_temperature'],
       ev_min_surplus_watts: ['number.energiemanager_ev_minimum_surplus_power'],
       ev_cloud_hysteresis_seconds: ['number.energiemanager_ev_cloud_hysteresis_delay'],
+      ev_wakeup_delay_seconds: [
+        'number.energiemanager_ev_wake_up_delay',
+        'number.energiemanager_ev_wakeup_delay',
+        'number.energiemanager_ev_wakeup_delay_seconds',
+      ],
       electricity_price: ['number.energiemanager_electricity_tariff_price'],
       action_tracing_enabled: [
         'switch.energiemanager_action_tracing',

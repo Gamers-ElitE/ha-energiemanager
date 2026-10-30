@@ -584,3 +584,109 @@ async def test_action_tracing_switch_sensor_and_clear_service(
     assert trace_sensor is not None
     assert trace_sensor.attributes["trace_count"] == 0
     assert trace_sensor.state == "Keine Aktionen"
+
+
+async def test_ev_wakeup_delay_and_awake_detection(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """EV charging handles wake-up delay and verifies awake state before sending commands."""
+    coord = init_integration.runtime_data.coordinator
+
+    # 1. Verify number entity exists and defaults to 10.0
+    wakeup_num = hass.states.get("number.energiemanager_ev_wake_up_delay")
+    assert wakeup_num is not None
+    assert wakeup_num.state == "10.0"
+
+    # 2. Update value via number service call
+    await hass.services.async_call(
+        NUMBER_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_ENTITY_ID: "number.energiemanager_ev_wake_up_delay", ATTR_VALUE: 5},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coord.ev_wakeup_delay_seconds == 5.0
+    assert hass.states.get("number.energiemanager_ev_wake_up_delay").state == "5.0"
+
+    # 3. Test wake-up logic when starting charging from asleep state
+    # First ensure charging is off so we test the transition to charging
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_OFF},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get("select.energiemanager_ev_charging_mode").state == CHARGING_MODE_OFF
+
+    wakeup_called = []
+    charger_switched = []
+    current_set = []
+
+    hass.services.async_register(
+        "button",
+        "press",
+        lambda call: wakeup_called.append(call.data),
+    )
+    hass.services.async_register(
+        "switch",
+        "turn_on",
+        lambda call: charger_switched.append(call.data),
+    )
+    hass.services.async_register(
+        "number",
+        "set_value",
+        lambda call: current_set.append(call.data),
+    )
+
+    # Set awake sensor to off and set a short delay for fast test execution
+    coord.ev_wakeup_delay_seconds = 0.05
+    hass.states.async_set("button.tesla_wake_up", "2026-10-30T09:00:00+00:00")
+    hass.states.async_set("switch.tesla_charger", "off")
+    hass.states.async_set("number.tesla_charging_amps", "0")
+    hass.states.async_set("binary_sensor.tesla_awake", "off")
+    hass.states.async_set("sensor.tesla_charging_power", "0")
+
+    # Turn on action tracing to inspect traces
+    coord.action_tracing_enabled = True
+
+    # Call select_option to start fast charging mode
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_FAST},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Verify wakeup button was pressed
+    assert len(wakeup_called) == 1
+    assert wakeup_called[0][ATTR_ENTITY_ID] == "button.tesla_wake_up"
+
+    # Verify charger was activated
+    assert len(charger_switched) == 1
+    assert charger_switched[0][ATTR_ENTITY_ID] == "switch.tesla_charger"
+
+    # Verify action traces
+    trace_sensor = hass.states.get("sensor.energiemanager_last_action_trace")
+    assert trace_sensor is not None
+    traces = trace_sensor.attributes["recent_traces"]
+    ev_traces = [t for t in traces if t["category"] == "ev"]
+    assert any("Wake-Up" in t["action"] for t in ev_traces)
+    assert any("Warte auf Aufwachen" in t["action"] for t in ev_traces)
+
+    # 4. Test auto-discovery of awake sensor from ref entities
+    assert coord.resolve_ev_awake_entity() == "binary_sensor.tesla_awake"
+
+    # Test auto-discovery from button name pattern
+    hass.states.async_set("binary_sensor.my_car_awake", "on")
+    hass.config_entries.async_update_entry(
+        coord.config_entry,
+        data={
+            **coord.config_entry.data,
+            "ev_awake_binary_sensor": None,
+            "ev_wakeup_button": "button.my_car_wake_up_car",
+        },
+    )
+    assert coord.resolve_ev_awake_entity() == "binary_sensor.my_car_awake"

@@ -253,6 +253,18 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerNumberEntityDescription, ...] = (
         set_fn=lambda coord, val: coord.async_set_parameter("ev_cloud_hysteresis_seconds", val),
     ),
     EnergiemanagerNumberEntityDescription(
+        key="ev_wakeup_delay_seconds",
+        translation_key="ev_wakeup_delay_seconds",
+        entity_category=EntityCategory.CONFIG,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        native_min_value=1,
+        native_max_value=60,
+        native_step=1,
+        mode=NumberMode.SLIDER,
+        value_fn=lambda data: data.get("ev_wakeup_delay_seconds"),
+        set_fn=lambda coord, val: coord.async_set_parameter("ev_wakeup_delay_seconds", val),
+    ),
+    EnergiemanagerNumberEntityDescription(
         key="electricity_price",
         translation_key="electricity_price",
         entity_category=EntityCategory.CONFIG,

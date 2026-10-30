@@ -20,6 +20,7 @@ CONF_EV_BLE_CONNECTED_BINARY_SENSOR = "ev_ble_connected_binary_sensor"
 CONF_EV_CURRENT_NUMBER = "ev_current_number"
 CONF_EV_CHARGING_SWITCH = "ev_charging_switch"
 CONF_EV_WAKEUP_BUTTON = "ev_wakeup_button"
+CONF_EV_AWAKE_BINARY_SENSOR = "ev_awake_binary_sensor"
 CONF_CLIMATE_ENTITY = "climate_entity"
 CONF_OUTDOOR_TEMP_SENSOR = "outdoor_temp_sensor"
 CONF_PV_POWER_SENSOR = "pv_power_sensor"
@@ -71,6 +72,7 @@ EV_STOP_GRID_IMPORT_WATTS = 300.0
 EV_MAX_CURRENT_A = 16
 EV_MIN_SURPLUS_WATTS = 1380.0
 EV_CLOUD_HYSTERESIS_SECONDS = 300.0
+DEFAULT_EV_WAKEUP_DELAY_SECONDS = 10.0
 
 CHARGING_MODE_OFF = "off"
 CHARGING_MODE_PV_SURPLUS = "pv_surplus"
