@@ -15,20 +15,29 @@ Home Assistant Custom Integration zur intelligenten Nulleinspeisung, Prioritäte
 - **Nulleinspeisung mit EMA-Filterung:**
   - Glättung des Netzzählers mittels exponentiellem gleitendem Mittelwert (EMA, $\alpha = 0{,}35$) gegen kurzzeitige Leistungsspitzen (z. B. Induktionskochfeld).
   - Symmetrische Totzone von $\pm 60\,\text{W}$ verhindert ständiges Takten und Schwingungen der Stellglieder.
-- **5-stufige Prioritäten-Kaskade:**
+- **Konfigurierbare Prioritäten-Kaskade:**
+  - Reihenfolge der Überschussabnehmer frei wählbar (z. B. `Warmwasser → Auto → Klima`, `Auto → Warmwasser → Klima` etc.):
   1. **Hausgrundlast:** Automatisch vorrangig durch phasenübergreifende Saldierung des Netzzählers.
   2. **Heimspeicher (Anker Solarbank):** Konfigurierbarer Mindest-Reserve-SOC (0–100 %) via Schieberegler (z. B. Sommer 60 %, Winter 0 %).
-  3. **Thermischer Puffer (Multisplit-Klimaanlage):** Nutzt moderate Überschüsse ($500\,\text{W}$ bis $1.350\,\text{W}$) zur Verschiebung der Raum-Solltemperatur um $\pm 2{,}5\,^\circ\text{C}$ inkl. automatischer Wiederherstellung des vorherigen Sollwerts (mit 20 Minuten Kompressorschutz-Mindestlaufzeit).
-  4. **Elektrofahrzeug (Tesla via Mobile Connector):** Dynamische 1-phasige Überschussladung ab $1.380\,\text{W}$ ($6\,\text{A}$).
-  5. **Resteinspeisung ins Netz:** Verbleibender Überschuss nach Deckung der Stufen 1–4.
+  3. **Warmwasser-Wärmepumpe:** PV-Aufheizung bis Ziel-Sollwert (z. B. 53 °C), Netzbezugs-Stopp (z. B. 51 °C) und automatische Winter-Mindesttemperatur (42 °C zu PV-Peak-Zeiten).
+  4. **Elektrofahrzeug (Tesla):** Dynamische 1-phasige Überschussladung ab $1.380\,\text{W}$ ($6\,\text{A}$) mit automatischem Wake-Up-Handshake und Awake-Sensor-Erkennung.
+  5. **Thermischer Puffer (Multisplit-Klimaanlage):** Nutzt moderate Überschüsse ($500\,\text{W}$ bis $1.350\,\text{W}$) zur Verschiebung der Raum-Solltemperatur um $\pm 2{,}5\,^\circ\text{C}$ inkl. automatischer Wiederherstellung des vorherigen Sollwerts (20 Min. Kompressorschutz) und automatischer Zuheizung an kalten Tagen.
+  6. **Resteinspeisung ins Netz:** Verbleibender Überschuss nach Deckung aller aktiven Stufen.
 - **Akku-Schutzverriegelung (Hardware-Schutz):**
   - Verhindert das verlustbehaftete Entladen des Heimspeichers in die Autobatterie.
-  - Sobald Ladeleistung $> 250\,\text{W}$: Automatische Aktivierung der Entladesperre des Speichers.
+  - Sobald Ladeleistung $> 250\,\text{W}$: Automatische Aktivierung der Entladesperre des Speichers (unterstützt Schalter und Auswahllisten).
   - Abschaltverzögerung von 60 Sekunden nach Ladeende ($\le 250\,\text{W}$) vor Freigabe der Speicherentladung.
 - **1-Phasen Tesla-Ladesteuerung (230 V via lokalem BLE-über-MQTT):**
   - Einstellbereich von $6\,\text{A}$ ($1.380\,\text{W}$) bis $16\,\text{A}$ ($3.680\,\text{W}$) in präzisen $230\,\text{W}$-Schritten ($1\,\text{A}$).
   - Modi: `Aus`, `PV-Überschuss` (inkl. 180 s Wolkenpuffer bei 6 A), `Schnellladen` (maximale Ladeleistung bis Ziel-SOC).
-  - Lokale Steuerung: Automatische Fahrzeug-Präsenzerkennung und Wake-up-Trigger ohne Cloud-Latenz.
+  - Lokale Steuerung: Präsenzerkennung, BLE Wake-Up-Trigger mit einstellbarer Aufwach-Wartezeit und Awake-Erkennung.
+- **Aktions-Traces & Transparenz:**
+  - Optionale Aufzeichnung aller automatischen Stellentscheidungen (Wake-Up, Ladestrom, Speicher-Sperre, Klimapuffer, Warmwasser) in einem FIFO-Puffer (bis zu 100 Einträge).
+  - Live-Inspektion direkt im Dashboard-Tab „🔍 Aktions-Traces“ mit Kategoriefilter und Zeitstempeln.
+- **Interaktives Custom-Panel (Dashboard):**
+  - Live-Visualisierung des Energieflusses (Haus, PV, Netz, Speicher, Auto).
+  - Ladesitzungen & Historie: Automatische Aufzeichnung aller Ladevorgänge mit Solar- und Netzanteil.
+  - Schwellenwerte & Feintuning: Alle Parameter (EMA, Totzone, Puffer, Hysterese, Strompreis) live per UI anpassbar.
 - **Ladesitzungs-Tracking & Energiebilanz:**
   - Automatische Lade-Sitzungserkennung (Steckerstatus & Ladeleistung $> 200\,\text{W}$).
   - Echtzeit-Zerlegung des Ladestroms in Solar- und Netzanteil.
