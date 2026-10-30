@@ -729,6 +729,81 @@ const _CSS = `
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
+/* Action Traces */
+.em-trace-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.em-trace-item {
+  background: var(--card-background-color, rgba(127, 127, 127, 0.05));
+  border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.12));
+  border-radius: var(--em-radius-md);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: background 0.15s ease;
+}
+.em-trace-item:hover {
+  background: var(--secondary-background-color, rgba(127, 127, 127, 0.1));
+}
+.em-trace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.em-trace-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.72em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.em-trace-cat-ev { color: #a78bfa; background: rgba(139, 92, 246, 0.18); }
+.em-trace-cat-dhw { color: #2dd4bf; background: rgba(20, 184, 166, 0.18); }
+.em-trace-cat-ac { color: #22d3ee; background: rgba(6, 182, 212, 0.18); }
+.em-trace-cat-battery { color: #60a5fa; background: rgba(59, 130, 246, 0.18); }
+.em-trace-cat-system { color: #94a3b8; background: rgba(148, 163, 184, 0.18); }
+.em-trace-time {
+  font-size: 0.78em;
+  font-family: monospace;
+  color: var(--secondary-text-color);
+}
+.em-trace-body {
+  font-size: 0.95em;
+  font-weight: 600;
+  color: var(--primary-text-color);
+}
+.em-trace-reason {
+  font-size: 0.83em;
+  color: var(--secondary-text-color);
+  background: rgba(0, 0, 0, 0.16);
+  padding: 6px 10px;
+  border-radius: var(--em-radius-sm);
+  border-left: 3px solid var(--primary-color, #0284c7);
+}
+.em-trace-target {
+  font-size: 0.76em;
+  color: var(--secondary-text-color);
+  font-family: monospace;
+  opacity: 0.85;
+}
+.em-empty-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 20px;
+}
+
 @media (max-width: 1020px) {
   .em-flow-consumers { grid-template-columns: repeat(2, 1fr); }
   .em-flow-svg { display: none; }
@@ -1157,6 +1232,15 @@ class SamEnergiemanagerPanel extends HTMLElement {
       ev_min_surplus_watts: ['number.energiemanager_ev_minimum_surplus_power'],
       ev_cloud_hysteresis_seconds: ['number.energiemanager_ev_cloud_hysteresis_delay'],
       electricity_price: ['number.energiemanager_electricity_tariff_price'],
+      action_tracing_enabled: [
+        'switch.energiemanager_action_tracing',
+        'switch.energiemanager_action_tracing_enabled',
+        'switch.sam_energiemanager_action_tracing_enabled',
+      ],
+      last_action_trace: [
+        'sensor.energiemanager_last_action_trace',
+        'sensor.sam_energiemanager_last_action_trace',
+      ],
     };
     const states = this._hass.states || {};
     for (const [key, candidates] of Object.entries(fallbacks)) {
@@ -1324,6 +1408,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const tabs = [
       { id: 'overview', label: '⚡ Energiefluss & Steuerung' },
       { id: 'sessions', label: '📊 Ladebilanz & Sitzungen' },
+      { id: 'traces', label: '🔍 Aktions-Traces' },
       { id: 'settings', label: '🎛️ Schwellenwerte & Feintuning' },
     ];
     if (hasSim) {
@@ -1340,6 +1425,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
     let paneHtml = '';
     if (this._tab === 'overview') paneHtml = this._htmlOverview();
     else if (this._tab === 'sessions') paneHtml = this._htmlSessions();
+    else if (this._tab === 'traces') paneHtml = this._htmlTraces();
     else if (this._tab === 'settings') paneHtml = this._htmlSettings();
     else if (this._tab === 'simulator') paneHtml = this._htmlSimulator();
 
@@ -1918,6 +2004,139 @@ class SamEnergiemanagerPanel extends HTMLElement {
     `;
   }
 
+  _htmlTraces() {
+    const traceSt = this._stateObj('last_action_trace');
+    const attrs = (traceSt && traceSt.attributes) || {};
+    const tracingEnabled = this._bool('action_tracing_enabled') || !!attrs.tracing_enabled;
+    const rawTraces = Array.isArray(attrs.recent_traces) ? attrs.recent_traces : [];
+    const traces = [...rawTraces].reverse();
+    const traceCount = traces.length;
+
+    const filter = this._traceFilter || 'all';
+
+    const filtered = filter === 'all'
+      ? traces
+      : traces.filter((t) => t.category === filter);
+
+    const filterBtns = [
+      { id: 'all', label: 'Alle' },
+      { id: 'ev', label: '🚗 Tesla EV' },
+      { id: 'dhw', label: '💧 Warmwasser' },
+      { id: 'ac', label: '❄️ Klima' },
+      { id: 'battery', label: '🔋 Speicher' },
+      { id: 'system', label: '⚙️ System' },
+    ]
+      .map(
+        (f) => `
+        <button class="em-btn ${filter === f.id ? 'em-btn-primary' : ''}" data-trace-filter="${f.id}">
+          ${f.label}
+        </button>
+      `
+      )
+      .join('');
+
+    let listHtml = '';
+    if (filtered.length === 0) {
+      listHtml = `
+        <div class="em-empty-box">
+          <div style="font-size:2.2em;margin-bottom:8px">🔍</div>
+          <div style="font-weight:600;font-size:1.05em">Keine Aktions-Traces vorhanden</div>
+          <div style="font-size:0.85em;color:var(--secondary-text-color);margin-top:6px;max-width:500px;line-height:1.45">
+            ${
+              tracingEnabled
+                ? 'Die Aufzeichnung ist aktiv. Sobald der Energiemanager einen Steuerbefehl ausführt (z. B. Ladestrom regelt, Wärmepumpe umschaltet oder Klima anpasst), erscheint dieser sofort hier.'
+                : 'Aktiviere oben <strong>Aktionen aufzeichnen</strong>, um alle Steuerbefehle und Entscheidungen live zu protokollieren.'
+            }
+          </div>
+        </div>
+      `;
+    } else {
+      const itemsHtml = filtered
+        .map((t) => {
+          const cat = _esc(t.category || 'system');
+          const catLabels = {
+            ev: 'Tesla EV',
+            dhw: 'Warmwasser',
+            ac: 'Klima',
+            battery: 'Speicher',
+            system: 'System',
+          };
+          const catIcons = {
+            ev: '🚗',
+            dhw: '💧',
+            ac: '❄️',
+            battery: '🔋',
+            system: '⚙️',
+          };
+          const catLabel = catLabels[cat] || cat.toUpperCase();
+          const catIcon = catIcons[cat] || '📋';
+          const action = _esc(t.action || '–');
+          const reason = _esc(t.reason || '');
+          const target = t.target ? `<span class="em-trace-target">${_esc(t.target)}</span>` : '';
+          const time = _esc(t.time || (t.timestamp ? t.timestamp.split('T')[1].split('.')[0] : '–'));
+
+          return `
+            <div class="em-trace-item">
+              <div class="em-trace-head">
+                <span class="em-trace-cat em-trace-cat-${cat}">
+                  <span>${catIcon}</span>
+                  <span>${catLabel}</span>
+                </span>
+                ${target}
+                <span style="flex:1"></span>
+                <span class="em-trace-time">⏱️ ${time}</span>
+              </div>
+              <div class="em-trace-body">${action}</div>
+              ${reason ? `<div class="em-trace-reason"><strong>Grund:</strong> ${reason}</div>` : ''}
+            </div>
+          `;
+        })
+        .join('');
+
+      listHtml = `<div class="em-trace-timeline">${itemsHtml}</div>`;
+    }
+
+    return `
+      <div class="em-card" style="margin-bottom:16px">
+        <div class="em-card-head" style="flex-wrap:wrap;gap:12px">
+          <div>
+            <div class="em-card-title">🔍 Live Action-Traces & Regelungs-Protokoll</div>
+            <div class="em-card-sub" style="font-size:0.8em;color:var(--secondary-text-color);margin-top:2px">
+              Protokolliert alle Steuerbefehle (Ladestrom, Schalter, Wärmepumpe, Klima) und Begründungen
+            </div>
+          </div>
+          <span style="flex:1"></span>
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:0.9em">
+              <input type="checkbox" data-switch="action_tracing_enabled" ${tracingEnabled ? 'checked' : ''}>
+              <span>Aktionen aufzeichnen</span>
+            </label>
+            <button class="em-btn" data-action="clear-traces" title="Alle aufgezeichneten Traces löschen" ${traceCount === 0 ? 'disabled' : ''}>
+              🗑️ Traces leeren
+            </button>
+            <button class="em-btn" data-action="recalculate" title="Neu auslesen">
+              ↻ Aktualisieren
+            </button>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--divider-color, rgba(127,127,127,0.12));flex-wrap:wrap;gap:10px">
+          <div style="display:flex;align-items:center;gap:8px;font-size:0.85em">
+            <span class="em-dot ${tracingEnabled ? 'em-pulse' : ''}" style="background:${tracingEnabled ? '#10b981' : '#94a3b8'}"></span>
+            <span>${tracingEnabled ? `<strong>Aufzeichnung aktiv</strong> (${traceCount} Aktionen)` : 'Aufzeichnung inaktiv'}</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${filterBtns}
+          </div>
+        </div>
+      </div>
+
+      <div class="em-card">
+        ${listHtml}
+      </div>
+    `;
+  }
+
   _htmlSettings() {
     const sectionsHtml = _THRESHOLD_SECTIONS
       .map((sec) => {
@@ -2161,10 +2380,20 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
+    sr.querySelectorAll('[data-trace-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this._traceFilter = btn.dataset.traceFilter;
+        this._render();
+      });
+    });
+
     sr.querySelectorAll('[data-action]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const act = btn.dataset.action;
-        if (act === 'recalculate') {
+        if (act === 'clear-traces') {
+          await this._hass.callService('sam_energiemanager', 'clear_traces', {});
+          this._showToast('Traces geleert');
+        } else if (act === 'recalculate') {
           const refreshEid = this._entId('grid_power_filtered') || 'sensor.energiemanager_grid_power_filtered';
           await this._hass.callService('homeassistant', 'update_entity', { entity_id: refreshEid });
           this._showToast('Regelschleife neu berechnet');

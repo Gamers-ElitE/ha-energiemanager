@@ -143,4 +143,19 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get("last_session_summary"),
         attr_fn=lambda data: data.get("last_session_data", {}),
     ),
+    EnergiemanagerSensorEntityDescription(
+        key="last_action_trace",
+        translation_key="last_action_trace",
+        value_fn=lambda data: (
+            f"[{data['last_action_trace']['category'].upper()}] {data['last_action_trace']['action']}"
+            if data.get("last_action_trace") and isinstance(data.get("last_action_trace"), dict)
+            else "Keine Aktionen"
+        ),
+        attr_fn=lambda data: {
+            "tracing_enabled": data.get("action_tracing_enabled", False),
+            "trace_count": data.get("trace_count", 0),
+            "last_action": data.get("last_action_trace"),
+            "recent_traces": data.get("action_traces", []),
+        },
+    ),
 )

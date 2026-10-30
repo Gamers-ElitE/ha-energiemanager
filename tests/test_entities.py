@@ -518,3 +518,69 @@ async def test_consumer_priority_order_select_and_cascade_yielding(
     assert init_integration.runtime_data.coordinator.priority_order == "dhw_ac_ev"
     # Now in dhw_ac_ev, AC buffer does not yield to EV and turns on in 500-1500 W surplus window
     assert hass.states.get("binary_sensor.energiemanager_thermal_ac_buffer_active").state == "on"
+
+
+async def test_action_tracing_switch_sensor_and_clear_service(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Action tracing records actuator actions and can be enabled, inspected, and cleared."""
+    tracing_switch = hass.states.get("switch.energiemanager_action_tracing")
+    assert tracing_switch is not None
+    assert tracing_switch.state == "off"
+
+    trace_sensor = hass.states.get("sensor.energiemanager_last_action_trace")
+    assert trace_sensor is not None
+    assert trace_sensor.state == "Keine Aktionen"
+    assert trace_sensor.attributes["trace_count"] == 0
+    assert trace_sensor.attributes["tracing_enabled"] is False
+
+    # Turn on action tracing
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: "switch.energiemanager_action_tracing"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert init_integration.runtime_data.coordinator.action_tracing_enabled is True
+    trace_sensor = hass.states.get("sensor.energiemanager_last_action_trace")
+    assert trace_sensor is not None
+    assert trace_sensor.attributes["tracing_enabled"] is True
+    assert trace_sensor.attributes["trace_count"] >= 1  # System activation trace
+
+    # Trigger an actuator action: AC buffer shift
+    hass.services.async_register("climate", "set_temperature", lambda call: None)
+    hass.services.async_register("climate", "set_hvac_mode", lambda call: None)
+    hass.states.async_set("climate.multisplit", "heat", {"temperature": 20.0, "min_temp": 10.0, "max_temp": 31.0})
+    hass.states.async_set("binary_sensor.tesla_plugged", "off")
+    hass.states.async_set("sensor.grid_power", "0")
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: "switch.energiemanager_thermal_ac_buffer_enabled"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    trace_sensor = hass.states.get("sensor.energiemanager_last_action_trace")
+    assert trace_sensor is not None
+    assert trace_sensor.attributes["trace_count"] >= 2
+    recent_traces = trace_sensor.attributes["recent_traces"]
+    categories = [t["category"] for t in recent_traces]
+    assert "ac" in categories
+
+    # Call clear_traces service action
+    await hass.services.async_call(
+        DOMAIN,
+        "clear_traces",
+        {"config_entry_id": init_integration.entry_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    trace_sensor = hass.states.get("sensor.energiemanager_last_action_trace")
+    assert trace_sensor is not None
+    assert trace_sensor.attributes["trace_count"] == 0
+    assert trace_sensor.state == "Keine Aktionen"

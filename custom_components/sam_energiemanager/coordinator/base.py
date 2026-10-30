@@ -57,6 +57,8 @@ from custom_components.sam_energiemanager.const import (
     EV_STOP_GRID_IMPORT_WATTS,
     EV_VOLTAGE,
     EVENT_SESSION_COMPLETED,
+    LOGGER,
+    MAX_ACTION_TRACES,
     PRIORITY_DHW_AC_EV,
     PRIORITY_DHW_EV_AC,
     PRIORITY_EV_AC_DHW,
@@ -140,6 +142,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._daily_pv_kwh: float = 0.0
         self._daily_grid_import_kwh: float = 0.0
         self._daily_grid_export_kwh: float = 0.0
+        self.action_tracing_enabled: bool = False
+        self._recent_traces: list[dict[str, Any]] = []
         self.session_tracker = SessionTracker()
 
     def async_setup_listeners(self) -> Callable[[], None]:
@@ -336,7 +340,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 self._battery_lock_active = False
                 self._battery_low_power_since = None
 
-        await self._async_sync_battery_lock()
+        await self._async_sync_battery_lock(ev_power=ev_power)
 
         # Pre-read hot water state for priority determination
         water_temp = self._read_water_temperature()
@@ -489,6 +493,10 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "ev_min_surplus_watts": self.ev_min_surplus_watts,
             "ev_cloud_hysteresis_seconds": self.ev_cloud_hysteresis_seconds,
             "electricity_price": self.electricity_price,
+            "action_tracing_enabled": self.action_tracing_enabled,
+            "action_traces": list(self._recent_traces),
+            "trace_count": len(self._recent_traces),
+            "last_action_trace": self._recent_traces[-1] if self._recent_traces else None,
         }
 
     def _resolve_water_heater_entities(self) -> list[str]:
@@ -646,6 +654,25 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     blocking=False,
                 )
 
+            reason_map = {
+                "min_temp_boost": "Winter-Mindestschutz: Wassertemperatur < 42 °C beim Solar-Peak",
+                "pv_surplus": "PV-Überschuss ausreichend (Heizfenster 10:00–18:00 Uhr)",
+                "yield_to_higher_priority": f"Weicht Vorrang-Verbraucher (Kaskade: {self.priority_order})",
+                "target_reached": f"Zieltemperatur ({self.dhw_target_temp:.0f} °C) erreicht",
+                "grid_import_stop": "Netzbezug zu hoch (Heizen beendet)",
+                "evening_off": "Heizfenster beendet (nach 18:00 Uhr)",
+            }
+            reason_str = reason_map.get(self._dhw_reason, self._dhw_reason or "Regelung")
+
+            self.record_trace(
+                category="dhw",
+                action=f"Warmwasser-Modus auf '{desired}' gesetzt",
+                reason=reason_str,
+                target=entity_id,
+                value=desired,
+                details={"mode": desired, "reason": self._dhw_reason},
+            )
+
     async def _async_update_ac_buffer(
         self,
         *,
@@ -747,6 +774,14 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     {ATTR_ENTITY_ID: climate_id, "temperature": target_temp},
                     blocking=False,
                 )
+                self.record_trace(
+                    category="ac",
+                    action=f"Klimaanlage automatisch gestartet (Heizen auf {target_temp:.1f} °C)",
+                    reason=f"Klima war aus; Außentemp ({outdoor_temp:.1f} °C) <= {self.ac_auto_heat_max_outdoor_temp:.1f} °C bei PV-Überschuss",
+                    target=climate_id,
+                    value=f"{target_temp:.1f} °C",
+                    details={"target_temp": target_temp, "outdoor_temp": outdoor_temp},
+                )
                 return
 
             current_target = state.attributes.get("temperature")
@@ -770,6 +805,14 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 {ATTR_ENTITY_ID: climate_id, "temperature": target_temp},
                 blocking=False,
             )
+            self.record_trace(
+                category="ac",
+                action=f"Klima-Sollwert verschoben ({base_temp:.1f} °C → {target_temp:.1f} °C)",
+                reason=f"Pufferbetrieb aktiv (+{self.ac_buffer_temp_offset} °C bei PV-Überschuss)",
+                target=climate_id,
+                value=f"{target_temp:.1f} °C",
+                details={"base_temp": base_temp, "target_temp": target_temp},
+            )
         else:
             if self._ac_saved_temperature is not None:
                 restore_temp = self._ac_saved_temperature
@@ -780,6 +823,13 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     {ATTR_ENTITY_ID: climate_id, "temperature": restore_temp},
                     blocking=False,
                 )
+                self.record_trace(
+                    category="ac",
+                    action=f"Klima-Sollwert zurückgestellt ({restore_temp:.1f} °C)",
+                    reason="Pufferbetrieb beendet",
+                    target=climate_id,
+                    value=f"{restore_temp:.1f} °C",
+                )
             if self._ac_saved_hvac_mode == "off":
                 self._ac_saved_hvac_mode = None
                 await self.hass.services.async_call(
@@ -787,6 +837,13 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     "set_hvac_mode",
                     {ATTR_ENTITY_ID: climate_id, "hvac_mode": "off"},
                     blocking=False,
+                )
+                self.record_trace(
+                    category="ac",
+                    action="Klimaanlage wieder ausgeschaltet",
+                    reason="Auto-Heat Pufferbetrieb beendet",
+                    target=climate_id,
+                    value="off",
                 )
             else:
                 self._ac_saved_hvac_mode = None
@@ -858,7 +915,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         await self._async_sync_ev_actuators()
 
-    async def _async_sync_battery_lock(self) -> None:
+    async def _async_sync_battery_lock(self, *, ev_power: float = 0.0) -> None:
         """Synchronize the physical home battery discharge lock entity if configured."""
         entity_id = self.config_entry.data.get(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
         if not entity_id or self.hass.states.get(entity_id) is None:
@@ -874,6 +931,15 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     {ATTR_ENTITY_ID: entity_id, "option": target_option},
                     blocking=False,
                 )
+                self.record_trace(
+                    category="battery",
+                    action=f"Speichermodus auf '{target_option}' gesetzt",
+                    reason=f"EV-Ladeleistung ({ev_power:.0f} W) > Schwelle"
+                    if target_option == "charge"
+                    else "Nachlaufzeit abgelaufen",
+                    target=entity_id,
+                    value=target_option,
+                )
             return
         is_currently_on = self._read_bool(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
         if self._battery_lock_active and not is_currently_on:
@@ -883,12 +949,28 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=False,
             )
+            self.record_trace(
+                category="battery",
+                action="Batterie-Entladesperre aktiviert",
+                reason=f"EV-Ladeleistung ({ev_power:.0f} W) > Schwelle ({self.battery_lock_threshold_watts:.0f} W)",
+                target=entity_id,
+                value="on",
+                details={"ev_power_watts": ev_power, "threshold_watts": self.battery_lock_threshold_watts},
+            )
         elif not self._battery_lock_active and is_currently_on:
             await self.hass.services.async_call(
                 domain,
                 SERVICE_TURN_OFF,
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=False,
+            )
+            self.record_trace(
+                category="battery",
+                action="Batterie-Entladesperre aufgehoben",
+                reason=f"EV-Leistung niedrig; Nachlaufzeit ({self.battery_lock_release_seconds:.0f}s) abgelaufen",
+                target=entity_id,
+                value="off",
+                details={"ev_power_watts": ev_power},
             )
 
     async def _async_trigger_ev_wakeup(self) -> None:
@@ -900,6 +982,13 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 "press",
                 {ATTR_ENTITY_ID: button_id},
                 blocking=False,
+            )
+            self.record_trace(
+                category="ev",
+                action="Tesla Wake-Up ausgelöst",
+                reason="Ladevorgang beginnt (Fahrzeug wird aufgeweckt)",
+                target=button_id,
+                value="press",
             )
 
     async def _async_sync_ev_actuators(self) -> None:
@@ -914,6 +1003,14 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     {ATTR_ENTITY_ID: number_id, "value": self._ev_target_amps},
                     blocking=False,
                 )
+                self.record_trace(
+                    category="ev",
+                    action=f"Tesla Ladestrom angepasst: {round(current_amps) if current_amps is not None else 0} A → {self._ev_target_amps} A",
+                    reason=f"PV-Überschuss-Regelung (Sollwert: {self._ev_target_amps} A)",
+                    target=number_id,
+                    value=f"{self._ev_target_amps} A",
+                    details={"target_amps": self._ev_target_amps},
+                )
 
         switch_id = self.config_entry.data.get(CONF_EV_CHARGING_SWITCH)
         if switch_id and self.hass.states.get(switch_id) is not None:
@@ -925,12 +1022,29 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     {ATTR_ENTITY_ID: switch_id},
                     blocking=False,
                 )
+                self.record_trace(
+                    category="ev",
+                    action=f"Tesla Ladevorgang gestartet ({self._ev_target_amps} A)",
+                    reason="PV-Überschuss verfügbar"
+                    if self.charging_mode == CHARGING_MODE_PV_SURPLUS
+                    else "Schnellladen aktiv",
+                    target=switch_id,
+                    value="on",
+                    details={"amps": self._ev_target_amps, "mode": self.charging_mode},
+                )
             elif not self._ev_charging_active and is_on:
                 await self.hass.services.async_call(
                     "switch",
                     SERVICE_TURN_OFF,
                     {ATTR_ENTITY_ID: switch_id},
                     blocking=False,
+                )
+                self.record_trace(
+                    category="ev",
+                    action="Tesla Ladevorgang gestoppt",
+                    reason="Ladebedingungen nicht mehr erfüllt (Überschuss/Hysterese/Ziel-SOC)",
+                    target=switch_id,
+                    value="off",
                 )
 
     async def async_set_parameter(self, key: str, value: float, *, refresh: bool = True) -> None:
@@ -988,6 +1102,59 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
     async def async_set_dhw_enabled(self, *, enabled: bool) -> None:
         """Enable or disable automatic domestic hot water heat pump control and refresh."""
         self.dhw_enabled = enabled
+        await self.async_refresh()
+
+    def record_trace(
+        self,
+        *,
+        category: str,
+        action: str,
+        reason: str,
+        target: str | None = None,
+        value: Any = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Record an action trace in memory and log it when action tracing is enabled."""
+        if not self.action_tracing_enabled:
+            return
+
+        now = dt_util.now()
+        trace_entry = {
+            "timestamp": now.isoformat(timespec="seconds"),
+            "time": now.strftime("%H:%M:%S"),
+            "category": category,
+            "action": action,
+            "reason": reason,
+            "target": target,
+            "value": str(value) if value is not None else None,
+            "details": details or {},
+        }
+        self._recent_traces.append(trace_entry)
+        if len(self._recent_traces) > MAX_ACTION_TRACES:
+            self._recent_traces.pop(0)
+
+        LOGGER.info(
+            "[Trace][%s] %s%s -> %s (Grund: %s)",
+            category.upper(),
+            f"{target} " if target else "",
+            f"[{value}]" if value is not None else "",
+            action,
+            reason,
+        )
+
+    def clear_traces(self) -> None:
+        """Clear all in-memory action traces."""
+        self._recent_traces.clear()
+
+    async def async_set_action_tracing_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable action tracing and refresh."""
+        self.action_tracing_enabled = enabled
+        if enabled:
+            self.record_trace(
+                category="system",
+                action="Aktions-Tracing aktiviert",
+                reason="Benutzer hat Tracing-Schalter eingeschaltet",
+            )
         await self.async_refresh()
 
     def restore_sensor_value(

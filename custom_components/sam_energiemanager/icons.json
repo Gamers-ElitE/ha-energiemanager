@@ -56,6 +56,9 @@
       },
       "last_session_summary": {
         "default": "mdi:car-electric"
+      },
+      "last_action_trace": {
+        "default": "mdi:timeline-text-outline"
       }
     },
     "number": {
@@ -148,12 +151,21 @@
         "state": {
           "off": "mdi:water-boiler-off"
         }
+      },
+      "action_tracing_enabled": {
+        "default": "mdi:record-circle",
+        "state": {
+          "off": "mdi:record-circle-outline"
+        }
       }
     }
   },
   "services": {
     "refresh_data": {
       "service": "mdi:refresh"
+    },
+    "clear_traces": {
+      "service": "mdi:delete-sweep"
     }
   }
 }

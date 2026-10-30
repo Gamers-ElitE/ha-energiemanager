@@ -182,6 +182,9 @@
       },
       "last_session_summary": {
         "name": "Last charging session summary"
+      },
+      "last_action_trace": {
+        "name": "Last action trace"
       }
     },
     "number": {
@@ -271,6 +274,9 @@
       },
       "dhw_enabled": {
         "name": "Hot water heat pump auto control"
+      },
+      "action_tracing_enabled": {
+        "name": "Action tracing"
       }
     }
   },
@@ -282,6 +288,16 @@
         "config_entry_id": {
           "name": "Integration entry",
           "description": "The configuration entry to refresh."
+        }
+      }
+    },
+    "clear_traces": {
+      "name": "Clear action traces",
+      "description": "Clears all recorded action traces and decisions from memory.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "The configuration entry whose traces should be cleared."
         }
       }
     }

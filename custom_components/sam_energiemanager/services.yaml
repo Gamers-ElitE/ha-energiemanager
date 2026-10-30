@@ -14,3 +14,16 @@ refresh_data:
       selector:
         config_entry:
           integration: sam_energiemanager
+
+clear_traces:
+  name: Clear action traces
+  description: Clear all recorded in-memory action traces.
+  fields:
+    config_entry_id:
+      name: Integration entry
+      description: The configuration entry whose traces should be cleared.
+      required: false
+      example: 01JG3T2Q6Z9K4V8P0N5R7X2M1A
+      selector:
+        config_entry:
+          integration: sam_energiemanager
