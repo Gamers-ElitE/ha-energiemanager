@@ -691,10 +691,10 @@ async def test_ev_wakeup_delay_and_awake_detection(
     )
     assert coord.resolve_ev_awake_entity() == "binary_sensor.my_car_awake"
 
-    # Test auto-discovery of telemetry refresh button
+    # Test auto-discovery of telemetry refresh button (prefers force_update_env)
     assert coord.resolve_ev_force_update_button() is None
-    hass.states.async_set("button.my_car_force_update_all", "unknown")
-    assert coord.resolve_ev_force_update_button() == "button.my_car_force_update_all"
+    hass.states.async_set("button.my_car_force_update_env", "unknown")
+    assert coord.resolve_ev_force_update_button() == "button.my_car_force_update_env"
 
 
 async def test_ev_fast_charging_not_blocked_by_dhw_priority_and_cable_types(

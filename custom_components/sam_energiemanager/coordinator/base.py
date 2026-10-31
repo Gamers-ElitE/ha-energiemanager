@@ -1127,14 +1127,13 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     base = base[: -len(suffix)]
                     break
             for candidate in (
-                f"button.{base}_force_update_all",
                 f"button.{base}_force_update_env",
                 f"button.{base}_refresh",
             ):
                 if self.hass.states.get(candidate) is not None:
                     return candidate
 
-        for fallback in ("button.tesla_force_update_all", "button.ev_force_update_all"):
+        for fallback in ("button.tesla_force_update_env", "button.ev_force_update_env"):
             if self.hass.states.get(fallback) is not None:
                 return fallback
 
