@@ -140,14 +140,32 @@ const _CSS = `
   margin: -20px -18px 20px;
   padding: 16px 18px 0;
   border-bottom: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+  overflow: hidden;
+  max-width: calc(100% + 36px);
 }
 .em-tabs {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+}
+.em-tabs::-webkit-scrollbar {
+  height: 3px;
+}
+.em-tabs::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.35);
+  border-radius: 3px;
 }
 .em-tab {
-  padding: 10px 20px;
+  flex: 0 0 auto;
+  padding: 10px 18px;
   border: none;
   background: transparent;
   color: var(--secondary-text-color, #94a3b8);
@@ -159,6 +177,8 @@ const _CSS = `
   border-bottom: 2.5px solid transparent;
   transition: color 0.15s, border-color 0.15s;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .em-tab:hover {
   color: var(--primary-text-color);
@@ -734,6 +754,8 @@ const _CSS = `
   display: flex;
   flex-direction: column;
   gap: 10px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .em-trace-item {
   background: var(--card-background-color, rgba(127, 127, 127, 0.05));
@@ -744,6 +766,8 @@ const _CSS = `
   flex-direction: column;
   gap: 6px;
   transition: background 0.15s ease;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .em-trace-item:hover {
   background: var(--secondary-background-color, rgba(127, 127, 127, 0.1));
@@ -1134,8 +1158,16 @@ class SamEnergiemanagerPanel extends HTMLElement {
         if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
           return;
         }
+        // Avoid clobbering mouse dragging or active text selection
+        if (this._isMouseDown) {
+          return;
+        }
+        const sel = (this.shadowRoot && this.shadowRoot.getSelection ? this.shadowRoot.getSelection() : null) || window.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+          return;
+        }
         this._render();
-      }, 350);
+      }, 400);
     }
   }
 
@@ -1150,6 +1182,10 @@ class SamEnergiemanagerPanel extends HTMLElement {
   connectedCallback() {
     this._onResize = () => this._syncPanelHeight();
     window.addEventListener('resize', this._onResize);
+    this._onMouseDown = () => { this._isMouseDown = true; };
+    this._onMouseUp = () => { this._isMouseDown = false; };
+    window.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
     requestAnimationFrame(() => this._syncPanelHeight());
   }
 
@@ -1157,6 +1193,12 @@ class SamEnergiemanagerPanel extends HTMLElement {
     if (this._onResize) {
       window.removeEventListener('resize', this._onResize);
       this._onResize = null;
+    }
+    if (this._onMouseDown) {
+      window.removeEventListener('mousedown', this._onMouseDown);
+      window.removeEventListener('mouseup', this._onMouseUp);
+      this._onMouseDown = null;
+      this._onMouseUp = null;
     }
     if (this._updateThrottle) {
       clearTimeout(this._updateThrottle);
@@ -2100,6 +2142,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
                 ${target}
                 <span style="flex:1"></span>
                 <span class="em-trace-time">⏱️ ${time}</span>
+                <button class="em-btn" data-copy-text="${_esc(`[${time}] [${catLabel}] ${t.action || ''}${t.reason ? ` - Grund: ${t.reason}` : ''}${t.target ? ` (Ziel: ${t.target})` : ''}`)}" title="Diesen Trace kopieren" style="padding:2px 7px;font-size:0.75em;line-height:1.2;cursor:pointer">📋</button>
               </div>
               <div class="em-trace-body">${action}</div>
               ${reason ? `<div class="em-trace-reason"><strong>Grund:</strong> ${reason}</div>` : ''}
@@ -2126,6 +2169,9 @@ class SamEnergiemanagerPanel extends HTMLElement {
               <input type="checkbox" data-switch="action_tracing_enabled" ${tracingEnabled ? 'checked' : ''}>
               <span>Aktionen aufzeichnen</span>
             </label>
+            <button class="em-btn" data-action="copy-traces" title="Alle Traces in die Zwischenablage kopieren" ${traceCount === 0 ? 'disabled' : ''}>
+              📋 Traces kopieren
+            </button>
             <button class="em-btn" data-action="clear-traces" title="Alle aufgezeichneten Traces löschen" ${traceCount === 0 ? 'disabled' : ''}>
               🗑️ Traces leeren
             </button>
@@ -2405,7 +2451,24 @@ class SamEnergiemanagerPanel extends HTMLElement {
     sr.querySelectorAll('[data-action]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const act = btn.dataset.action;
-        if (act === 'clear-traces') {
+        if (act === 'copy-traces') {
+          const traces = this._getActionTraces();
+          if (!traces || traces.length === 0) {
+            this._showToast('Keine Traces vorhanden');
+            return;
+          }
+          const lines = traces.map((t) => {
+            const time = t.time || (t.timestamp ? t.timestamp.split('T')[1].split('.')[0] : '');
+            const cat = (t.category || 'system').toUpperCase();
+            return `[${time}] [${cat}] ${t.action || ''}${t.reason ? ` - Grund: ${t.reason}` : ''}${t.target ? ` (Ziel: ${t.target})` : ''}`;
+          });
+          try {
+            await navigator.clipboard.writeText(lines.join('\n'));
+            this._showToast('✓ Alle Traces in Zwischenablage kopiert');
+          } catch {
+            this._showToast('Kopieren fehlgeschlagen');
+          }
+        } else if (act === 'clear-traces') {
           await this._hass.callService('sam_energiemanager', 'clear_traces', {});
           this._showToast('Traces geleert');
         } else if (act === 'recalculate') {
@@ -2420,6 +2483,20 @@ class SamEnergiemanagerPanel extends HTMLElement {
             this._showToast('Wake-Up gesendet');
           } else {
             this._showToast('Kein Wake-Up-Button konfiguriert');
+          }
+        }
+      });
+    });
+
+    sr.querySelectorAll('[data-copy-text]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const text = btn.dataset.copyText;
+        if (text) {
+          try {
+            await navigator.clipboard.writeText(text);
+            this._showToast('✓ Trace kopiert');
+          } catch {
+            this._showToast('Kopieren fehlgeschlagen');
           }
         }
       });

@@ -77,7 +77,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, EventStateChangedData, callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -134,6 +134,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._ev_low_surplus_since: datetime | None = None
         self._ev_charging_active: bool = False
         self._ev_target_amps: int = 0
+        self._ev_stop_reason: str | None = None
         self._dhw_active: bool = False
         self._dhw_forced_min_temp: bool = False
         self._dhw_reason: str = "idle"
@@ -257,7 +258,28 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         state = self.hass.states.get(entity_id)
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return default
-        return state.state.lower() in (STATE_ON, "true", "connected", "plugged", "charging", "1", "home")
+        val = state.state.lower().strip()
+        if val in ("off", "false", "disconnected", "unplugged", "none", "not_home", "away", "0"):
+            return False
+        if val in (
+            STATE_ON,
+            "true",
+            "connected",
+            "plugged",
+            "charging",
+            "stopped",
+            "complete",
+            "iec",
+            "iec_type2",
+            "sae",
+            "standard",
+            "home",
+            "present",
+            "online",
+            "1",
+        ):
+            return True
+        return default
 
     async def _async_update_data(self) -> dict[str, Any]:
         """
@@ -289,7 +311,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         ev_soc = self._read_float(CONF_EV_SOC_SENSOR)
         ev_plugged = self._read_bool(CONF_EV_PLUGGED_BINARY_SENSOR, default=True)
         ev_ble_connected = self._read_bool(CONF_EV_BLE_CONNECTED_BINARY_SENSOR, default=True)
-        ev_ready_at_home = ev_plugged and ev_ble_connected
+        has_wakeup = bool(self.config_entry.data.get(CONF_EV_WAKEUP_BUTTON))
+        ev_ready_at_home = ev_plugged and (ev_ble_connected or has_wakeup)
 
         # A. EMA Filter, Deadband & Synchronized Home Power Consumption
         self._grid_ema = compute_ema(grid_raw, self._grid_ema, alpha=self.ema_alpha)
@@ -372,7 +395,13 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         if self.priority_order == PRIORITY_DHW_EV_AC:
             # Prio 3: DHW -> Prio 4: EV -> Prio 5: AC
-            ev_yield = dhw_ready_to_heat and surplus_power < self.dhw_min_surplus_watts and not self._ev_charging_active
+            # EV yields to DHW only if DHW is ready to heat and surplus is sufficient for DHW but not enough for both
+            ev_yield = (
+                dhw_ready_to_heat
+                and surplus_power >= self.dhw_min_surplus_watts
+                and surplus_power < (self.dhw_min_surplus_watts + self.ev_min_surplus_watts)
+                and not self._ev_charging_active
+            )
             ac_yield = ev_can_or_is_charging and (
                 not self._ev_charging_active or self._ev_target_amps < self.tesla_max_current
             )
@@ -424,7 +453,9 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             ev_power=ev_power,
             ev_soc=ev_soc,
             ev_ready_at_home=ev_ready_at_home,
+            ev_plugged=ev_plugged,
             battery_priority_active=battery_priority_active,
+            battery_soc=battery_soc,
             yield_to_higher_priority=ev_yield,
             in_deadband=in_deadband,
         )
@@ -644,20 +675,24 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             current_mode = st.attributes.get("operation_mode") or st.state
             if current_mode == desired:
                 continue
-            if domain == "select":
-                await self.hass.services.async_call(
-                    "select",
-                    "select_option",
-                    {ATTR_ENTITY_ID: entity_id, "option": desired},
-                    blocking=False,
-                )
-            elif domain == "water_heater":
-                await self.hass.services.async_call(
-                    "water_heater",
-                    "set_operation_mode",
-                    {ATTR_ENTITY_ID: entity_id, "operation_mode": desired},
-                    blocking=False,
-                )
+            try:
+                if domain == "select":
+                    await self.hass.services.async_call(
+                        "select",
+                        "select_option",
+                        {ATTR_ENTITY_ID: entity_id, "option": desired},
+                        blocking=False,
+                    )
+                elif domain == "water_heater":
+                    await self.hass.services.async_call(
+                        "water_heater",
+                        "set_operation_mode",
+                        {ATTR_ENTITY_ID: entity_id, "operation_mode": desired},
+                        blocking=False,
+                    )
+            except HomeAssistantError as err:
+                LOGGER.warning("Konnte Warmwassermodus für %s nicht setzen: %s", entity_id, err)
+                continue
 
             reason_map = {
                 "min_temp_boost": "Winter-Mindestschutz: Wassertemperatur < 42 °C beim Solar-Peak",
@@ -862,7 +897,9 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         ev_power: float,
         ev_soc: float | None,
         ev_ready_at_home: bool,
+        ev_plugged: bool,
         battery_priority_active: bool,
+        battery_soc: float | None,
         yield_to_higher_priority: bool = False,
         in_deadband: bool,
     ) -> None:
@@ -872,29 +909,56 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         if self.charging_mode == CHARGING_MODE_FAST and ev_soc is not None and ev_soc >= self.tesla_target_soc:
             self.charging_mode = CHARGING_MODE_OFF
+            self._ev_stop_reason = (
+                f"Schnellladen beendet: Ziel-SoC erreicht ({ev_soc:.0f}% ≥ {self.tesla_target_soc:.0f}%)"
+            )
 
-        if self.charging_mode == CHARGING_MODE_OFF or not ev_ready_at_home or yield_to_higher_priority:
+        if self.charging_mode == CHARGING_MODE_OFF:
             self._ev_charging_active = False
             self._ev_target_amps = 0
             self._ev_low_surplus_since = None
+            if not self._ev_stop_reason:
+                self._ev_stop_reason = "Lademodus ist 'Aus'"
+        elif not ev_ready_at_home:
+            self._ev_charging_active = False
+            self._ev_target_amps = 0
+            self._ev_low_surplus_since = None
+            if not ev_plugged:
+                self._ev_stop_reason = "Fahrzeug nicht angesteckt (Ladekabel getrennt)"
+            else:
+                self._ev_stop_reason = "Fahrzeug nicht zuhause / BLE nicht erreichbar"
         elif self.charging_mode == CHARGING_MODE_FAST:
             self._ev_charging_active = True
             self._ev_target_amps = max_amps
             self._ev_low_surplus_since = None
+            self._ev_stop_reason = None
         elif self.charging_mode == CHARGING_MODE_PV_SURPLUS:
-            if battery_priority_active:
+            if yield_to_higher_priority:
                 self._ev_charging_active = False
                 self._ev_target_amps = 0
                 self._ev_low_surplus_since = None
+                self._ev_stop_reason = "Warmwasser-Wärmepumpe hat Vorrang (Prio-Kaskade)"
+            elif battery_priority_active:
+                self._ev_charging_active = False
+                self._ev_target_amps = 0
+                self._ev_low_surplus_since = None
+                soc_str = f"{battery_soc:.0f}%" if battery_soc is not None else "?"
+                self._ev_stop_reason = (
+                    f"Heimspeicher-Priorität aktiv (Akku {soc_str} < Reserve {self.battery_reserve_soc:.0f}%)"
+                )
             else:
                 avail_power = surplus_power + max(0.0, ev_power)
                 if not self._ev_charging_active:
                     if avail_power >= self.ev_min_surplus_watts:
                         self._ev_charging_active = True
                         self._ev_low_surplus_since = None
+                        self._ev_stop_reason = None
                         self._ev_target_amps = compute_ev_target_current(surplus_power, ev_power, max_amps)
                     else:
                         self._ev_target_amps = 0
+                        self._ev_stop_reason = (
+                            f"Zu wenig PV-Überschuss ({avail_power:.0f} W < {self.ev_min_surplus_watts:.0f} W)"
+                        )
                 else:
                     if not in_deadband:
                         self._ev_target_amps = compute_ev_target_current(surplus_power, ev_power, max_amps)
@@ -910,6 +974,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                             self._ev_charging_active = False
                             self._ev_target_amps = 0
                             self._ev_low_surplus_since = None
+                            self._ev_stop_reason = f"Wolkenpuffer ({self.ev_cloud_hysteresis_seconds:.0f}s) abgelaufen bei Netzbezug ({grid_filtered:.0f} W)"
                         else:
                             self._ev_target_amps = max(EV_MIN_CURRENT_A, self._ev_target_amps)
                     else:
@@ -919,7 +984,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             await self._async_trigger_ev_wakeup()
             await self._async_wait_for_ev_awake()
 
-        await self._async_sync_ev_actuators()
+        await self._async_sync_ev_actuators(was_charging=was_charging)
 
     async def _async_sync_battery_lock(self, *, ev_power: float = 0.0) -> None:
         """Synchronize the physical home battery discharge lock entity if configured."""
@@ -1088,7 +1153,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 value="done",
             )
 
-    async def _async_sync_ev_actuators(self) -> None:
+    async def _async_sync_ev_actuators(self, *, was_charging: bool = False) -> None:
         """Propagate target current and charging switch state to BLE/MQTT entities only on change."""
         number_id = self.config_entry.data.get(CONF_EV_CURRENT_NUMBER)
         if number_id and self._ev_target_amps >= EV_MIN_CURRENT_A and self.hass.states.get(number_id) is not None:
@@ -1130,19 +1195,20 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     details={"amps": self._ev_target_amps, "mode": self.charging_mode},
                 )
             elif not self._ev_charging_active and is_on:
-                await self.hass.services.async_call(
-                    "switch",
-                    SERVICE_TURN_OFF,
-                    {ATTR_ENTITY_ID: switch_id},
-                    blocking=False,
-                )
-                self.record_trace(
-                    category="ev",
-                    action="Tesla Ladevorgang gestoppt",
-                    reason="Ladebedingungen nicht mehr erfüllt (Überschuss/Hysterese/Ziel-SOC)",
-                    target=switch_id,
-                    value="off",
-                )
+                if self.charging_mode != CHARGING_MODE_OFF or was_charging:
+                    await self.hass.services.async_call(
+                        "switch",
+                        SERVICE_TURN_OFF,
+                        {ATTR_ENTITY_ID: switch_id},
+                        blocking=False,
+                    )
+                    self.record_trace(
+                        category="ev",
+                        action="Tesla Ladevorgang gestoppt",
+                        reason=self._ev_stop_reason or "Ladebedingungen nicht mehr erfüllt",
+                        target=switch_id,
+                        value="off",
+                    )
 
     async def async_set_parameter(self, key: str, value: float, *, refresh: bool = True) -> None:
         """Update a numeric parameter or threshold on the coordinator and optionally refresh."""

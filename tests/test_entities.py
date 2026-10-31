@@ -690,3 +690,57 @@ async def test_ev_wakeup_delay_and_awake_detection(
         },
     )
     assert coord.resolve_ev_awake_entity() == "binary_sensor.my_car_awake"
+
+
+async def test_ev_fast_charging_not_blocked_by_dhw_priority_and_cable_types(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Test that EV fast charging is never blocked by DHW priority, and IEC cable is recognized."""
+    # Setup car plugged via IEC cable state
+    hass.states.async_set("binary_sensor.tesla_plugged", "IEC")
+    hass.states.async_set("sensor.tesla_soc", "30")
+
+    # Set DHW temperature to low (needs heating)
+    hass.states.async_set("water_heater.wassererhitzer", "heat_pump", {"current_temperature": 45, "temperature": 53})
+
+    # Set EMA alpha to 1.0 (instantaneous) and grid power to 1500 W import (no PV surplus)
+    await hass.services.async_call(
+        NUMBER_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_ENTITY_ID: "number.energiemanager_ema_smoothing_factor", ATTR_VALUE: 1.0},
+        blocking=True,
+    )
+    hass.states.async_set("sensor.grid_power", "1500")
+
+    # Turn mode to off, then surplus: car should not start charging without surplus
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_OFF},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: "pv_surplus"},
+        blocking=True,
+    )
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # In PV surplus mode with no surplus, EV target current should be 0
+    assert hass.states.get("sensor.energiemanager_ev_target_current").state == "0"
+
+    # Now switch to FAST charging mode
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_FAST},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Fast charging must NOT yield to DHW!
+    assert hass.states.get("select.energiemanager_ev_charging_mode").state == CHARGING_MODE_FAST
+    assert hass.states.get("sensor.energiemanager_ev_target_current").state == "13"
