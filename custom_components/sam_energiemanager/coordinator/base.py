@@ -27,6 +27,7 @@ from custom_components.sam_energiemanager.const import (
     CONF_EV_BLE_CONNECTED_BINARY_SENSOR,
     CONF_EV_CHARGING_SWITCH,
     CONF_EV_CURRENT_NUMBER,
+    CONF_EV_FORCE_UPDATE_BUTTON,
     CONF_EV_PLUGGED_BINARY_SENSOR,
     CONF_EV_POWER_SENSOR,
     CONF_EV_SOC_SENSOR,
@@ -40,6 +41,7 @@ from custom_components.sam_energiemanager.const import (
     DEADBAND_WATTS,
     DEFAULT_BATTERY_RESERVE_SOC,
     DEFAULT_ELECTRICITY_PRICE,
+    DEFAULT_EV_POLL_INTERVAL_SECONDS,
     DEFAULT_EV_WAKEUP_DELAY_SECONDS,
     DEFAULT_PRIORITY_ORDER,
     DEFAULT_TESLA_MAX_CURRENT,
@@ -121,6 +123,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self.ev_min_surplus_watts: float = EV_MIN_SURPLUS_WATTS
         self.ev_cloud_hysteresis_seconds: float = EV_CLOUD_HYSTERESIS_SECONDS
         self.ev_wakeup_delay_seconds: float = DEFAULT_EV_WAKEUP_DELAY_SECONDS
+        self.ev_poll_interval_seconds: float = DEFAULT_EV_POLL_INTERVAL_SECONDS
         self.electricity_price: float = float(
             self.config_entry.options.get(CONF_ELECTRICITY_PRICE, DEFAULT_ELECTRICITY_PRICE)
         )
@@ -129,6 +132,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._home_ema: float | None = None
         self._grid_window_samples: list[float] = []
         self._last_update_utc: datetime | None = None
+        self._last_ev_poll_utc: datetime | None = None
         self._battery_lock_active: bool = False
         self._battery_low_power_since: datetime | None = None
         self._ev_low_surplus_since: datetime | None = None
@@ -996,8 +1000,10 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         if self._ev_charging_active and not was_charging:
             await self._async_trigger_ev_wakeup()
             await self._async_wait_for_ev_awake()
+            await self._async_poll_ev_telemetry(now_utc, force=True)
 
         await self._async_sync_ev_actuators(was_charging=was_charging)
+        await self._async_poll_ev_telemetry(now_utc)
 
     async def _async_sync_battery_lock(self, *, ev_power: float = 0.0) -> None:
         """Synchronize the physical home battery discharge lock entity if configured."""
@@ -1103,6 +1109,74 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 return fallback
 
         return None
+
+    def resolve_ev_force_update_button(self) -> str | None:
+        """Return configured or auto-discovered EV telemetry refresh button."""
+        configured = self.config_entry.data.get(CONF_EV_FORCE_UPDATE_BUTTON)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        # Try to infer from wakeup button or charger switch entity ID
+        for ref_key in (CONF_EV_WAKEUP_BUTTON, CONF_EV_CHARGING_SWITCH):
+            ref_entity = self.config_entry.data.get(ref_key)
+            if not ref_entity:
+                continue
+            base = ref_entity.split(".", 1)[-1]
+            for suffix in ("_wake_up_car", "_wakeup_button", "_charger", "_charging"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            for candidate in (
+                f"button.{base}_force_update_all",
+                f"button.{base}_force_update_env",
+                f"button.{base}_refresh",
+            ):
+                if self.hass.states.get(candidate) is not None:
+                    return candidate
+
+        for fallback in ("button.tesla_force_update_all", "button.ev_force_update_all"):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    async def _async_poll_ev_telemetry(self, now_utc: datetime, *, force: bool = False) -> None:
+        """Periodically refresh Tesla BLE telemetry during active charging without keeping it awake when idle."""
+        # Never poll when vehicle is idle / not actively charging (to prevent phantom drain & preserve deep sleep)
+        if not self._ev_charging_active and not force:
+            self._last_ev_poll_utc = None
+            return
+
+        button_id = self.resolve_ev_force_update_button()
+        if not button_id or self.hass.states.get(button_id) is None:
+            return
+
+        if not force and self._last_ev_poll_utc is not None:
+            elapsed = (now_utc - self._last_ev_poll_utc).total_seconds()
+            if elapsed < self.ev_poll_interval_seconds:
+                return
+
+        self._last_ev_poll_utc = now_utc
+        try:
+            if self.hass.services.has_service("button", "press"):
+                await self.hass.services.async_call(
+                    "button",
+                    "press",
+                    {ATTR_ENTITY_ID: button_id},
+                    blocking=False,
+                )
+                self.record_trace(
+                    category="ev",
+                    action="Tesla BLE Telemetrie aktualisiert",
+                    reason="Startabfrage nach Aufwachen"
+                    if force
+                    else f"Zyklische Abfrage während Ladevorgang ({self.ev_poll_interval_seconds:.0f}s Intervall)",
+                    target=button_id,
+                    value="press",
+                    details={"interval_seconds": self.ev_poll_interval_seconds},
+                )
+        except HomeAssistantError as err:
+            LOGGER.warning("Konnte Tesla BLE Update-Button %s nicht auslösen: %s", button_id, err)
 
     def _is_ev_awake(self, awake_entity: str | None = None) -> bool:
         """Check whether the EV is currently awake."""
