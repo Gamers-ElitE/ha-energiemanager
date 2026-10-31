@@ -744,3 +744,11 @@ async def test_ev_fast_charging_not_blocked_by_dhw_priority_and_cable_types(
     # Fast charging must NOT yield to DHW!
     assert hass.states.get("select.energiemanager_ev_charging_mode").state == CHARGING_MODE_FAST
     assert hass.states.get("sensor.energiemanager_ev_target_current").state == "13"
+
+    # If the user manually changes the current on the car/app side (e.g. to 10 A),
+    # Energiemanager adopts it and does NOT overwrite it back to 13 A!
+    hass.states.async_set("number.tesla_charging_amps", "10")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.energiemanager_ev_target_current").state == "10"

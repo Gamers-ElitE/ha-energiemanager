@@ -134,6 +134,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._ev_low_surplus_since: datetime | None = None
         self._ev_charging_active: bool = False
         self._ev_target_amps: int = 0
+        self._ev_fast_charge_target_amps: int | None = None
         self._ev_stop_reason: str | None = None
         self._dhw_active: bool = False
         self._dhw_forced_min_temp: bool = False
@@ -909,6 +910,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         if self.charging_mode == CHARGING_MODE_FAST and ev_soc is not None and ev_soc >= self.tesla_target_soc:
             self.charging_mode = CHARGING_MODE_OFF
+            self._ev_fast_charge_target_amps = None
             self._ev_stop_reason = (
                 f"Schnellladen beendet: Ziel-SoC erreicht ({ev_soc:.0f}% ≥ {self.tesla_target_soc:.0f}%)"
             )
@@ -916,12 +918,14 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         if self.charging_mode == CHARGING_MODE_OFF:
             self._ev_charging_active = False
             self._ev_target_amps = 0
+            self._ev_fast_charge_target_amps = None
             self._ev_low_surplus_since = None
             if not self._ev_stop_reason:
                 self._ev_stop_reason = "Lademodus ist 'Aus'"
         elif not ev_ready_at_home:
             self._ev_charging_active = False
             self._ev_target_amps = 0
+            self._ev_fast_charge_target_amps = None
             self._ev_low_surplus_since = None
             if not ev_plugged:
                 self._ev_stop_reason = "Fahrzeug nicht angesteckt (Ladekabel getrennt)"
@@ -929,10 +933,19 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 self._ev_stop_reason = "Fahrzeug nicht zuhause / BLE nicht erreichbar"
         elif self.charging_mode == CHARGING_MODE_FAST:
             self._ev_charging_active = True
-            self._ev_target_amps = max_amps
             self._ev_low_surplus_since = None
             self._ev_stop_reason = None
+            if not was_charging or self._ev_fast_charge_target_amps is None:
+                self._ev_fast_charge_target_amps = max_amps
+                self._ev_target_amps = max_amps
+            else:
+                current_amps = self._read_float(CONF_EV_CURRENT_NUMBER)
+                if current_amps is not None and current_amps >= EV_MIN_CURRENT_A:
+                    self._ev_target_amps = round(current_amps)
+                else:
+                    self._ev_target_amps = self._ev_fast_charge_target_amps
         elif self.charging_mode == CHARGING_MODE_PV_SURPLUS:
+            self._ev_fast_charge_target_amps = None
             if yield_to_higher_priority:
                 self._ev_charging_active = False
                 self._ev_target_amps = 0
@@ -1168,7 +1181,9 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 self.record_trace(
                     category="ev",
                     action=f"Tesla Ladestrom angepasst: {round(current_amps) if current_amps is not None else 0} A → {self._ev_target_amps} A",
-                    reason=f"PV-Überschuss-Regelung (Sollwert: {self._ev_target_amps} A)",
+                    reason="Schnellladen aktiv"
+                    if self.charging_mode == CHARGING_MODE_FAST
+                    else f"PV-Überschuss-Regelung (Sollwert: {self._ev_target_amps} A)",
                     target=number_id,
                     value=f"{self._ev_target_amps} A",
                     details={"target_amps": self._ev_target_amps},
@@ -1224,6 +1239,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
     async def async_set_tesla_max_current(self, value: float) -> None:
         """Update the maximum 1-phase charging current and refresh."""
+        self._ev_fast_charge_target_amps = None
         await self.async_set_parameter("tesla_max_current", max(float(EV_MIN_CURRENT_A), min(16.0, round(value))))
 
     async def async_set_tesla_target_soc(self, value: float) -> None:
@@ -1238,6 +1254,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 translation_key="invalid_charging_mode",
                 translation_placeholders={"mode": mode},
             )
+        if mode != CHARGING_MODE_FAST:
+            self._ev_fast_charge_target_amps = None
         self.charging_mode = mode
         await self.async_refresh()
 
