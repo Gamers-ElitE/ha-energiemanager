@@ -21,6 +21,18 @@ class EnergiemanagerSwitchEntityDescription(SwitchEntityDescription):
 
 ENTITY_DESCRIPTIONS: tuple[EnergiemanagerSwitchEntityDescription, ...] = (
     EnergiemanagerSwitchEntityDescription(
+        key="master_control_enabled",
+        translation_key="master_control_enabled",
+        value_fn=lambda data: data.get("master_control_enabled"),
+        set_fn=lambda coord, val: coord.async_set_master_control_enabled(enabled=val),
+    ),
+    EnergiemanagerSwitchEntityDescription(
+        key="battery_control_enabled",
+        translation_key="battery_control_enabled",
+        value_fn=lambda data: data.get("battery_control_enabled"),
+        set_fn=lambda coord, val: coord.async_set_battery_control_enabled(enabled=val),
+    ),
+    EnergiemanagerSwitchEntityDescription(
         key="ac_buffer_enabled",
         translation_key="ac_buffer_enabled",
         value_fn=lambda data: data.get("ac_buffer_enabled"),

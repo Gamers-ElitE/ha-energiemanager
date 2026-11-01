@@ -35,6 +35,10 @@ ENTITY_DESCRIPTIONS: tuple[EnergiemanagerSensorEntityDescription, ...] = (
         attr_fn=lambda data: {
             "pv_power_watts": data.get("pv_power_watts"),
             "battery_power_watts": data.get("battery_power_watts"),
+            "battery_target_power": data.get("battery_target_power"),
+            "battery_target_mode": data.get("battery_target_mode"),
+            "master_control_enabled": data.get("master_control_enabled"),
+            "battery_control_enabled": data.get("battery_control_enabled"),
             "home_power_total_watts": data.get("home_power_total_watts"),
             "grid_10s_mean_watts": data.get("grid_10s_mean_watts"),
             "daily_home_kwh": data.get("daily_home_kwh"),

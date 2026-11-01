@@ -137,6 +137,18 @@
       }
     },
     "switch": {
+      "master_control_enabled": {
+        "default": "mdi:power",
+        "state": {
+          "off": "mdi:power-off"
+        }
+      },
+      "battery_control_enabled": {
+        "default": "mdi:battery-sync",
+        "state": {
+          "off": "mdi:battery-sync-outline"
+        }
+      },
       "ac_buffer_enabled": {
         "default": "mdi:air-conditioner",
         "state": {

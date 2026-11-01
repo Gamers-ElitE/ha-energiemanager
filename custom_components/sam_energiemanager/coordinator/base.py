@@ -12,13 +12,29 @@ from custom_components.sam_energiemanager.const import (
     AC_BUFFER_MIN_HOLD_SECONDS,
     AC_BUFFER_MIN_SURPLUS_WATTS,
     AC_BUFFER_TEMP_OFFSET,
+    BATTERY_CONTROL_DEADBAND,
+    BATTERY_CONTROL_FINE_TUNE_SECONDS,
+    BATTERY_CONTROL_MIN_CHANGE,
+    BATTERY_CONTROL_MIN_POWER,
+    BATTERY_CONTROL_PUFFER_CHARGE,
+    BATTERY_CONTROL_PUFFER_DISCHARGE,
+    BATTERY_DEFAULT_MAX_CHARGE,
+    BATTERY_DEFAULT_MAX_DISCHARGE,
+    BATTERY_DEFAULT_MAX_SOC,
+    BATTERY_DEFAULT_MIN_SOC,
     BATTERY_LOCK_RELEASE_SECONDS,
     BATTERY_LOCK_THRESHOLD_WATTS,
     CHARGING_MODE_FAST,
     CHARGING_MODE_OFF,
     CHARGING_MODE_PV_SURPLUS,
     CHARGING_MODES,
+    CONF_BATTERY_CHARGE_POWER_SENSOR,
     CONF_BATTERY_DISCHARGE_LOCK_SWITCH,
+    CONF_BATTERY_DISCHARGE_POWER_SENSOR,
+    CONF_BATTERY_FLOW_SELECT,
+    CONF_BATTERY_MAX_SOC_NUMBER,
+    CONF_BATTERY_MIN_SOC_NUMBER,
+    CONF_BATTERY_POWER_CONTROL_NUMBER,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_CLIMATE_ENTITY,
@@ -106,6 +122,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self.ac_buffer_enabled: bool = False
         self.ac_auto_heat_enabled: bool = False
         self.dhw_enabled: bool = True
+        self.master_control_enabled: bool = True
+        self.battery_control_enabled: bool = True
 
         self.ema_alpha: float = EMA_ALPHA
         self.deadband_watts: float = DEADBAND_WATTS
@@ -135,6 +153,9 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self._last_ev_poll_utc: datetime | None = None
         self._battery_lock_active: bool = False
         self._battery_low_power_since: datetime | None = None
+        self._last_battery_adjustment: datetime | None = None
+        self._battery_target_power: float = 0.0
+        self._battery_target_mode: str = "stop"
         self._ev_low_surplus_since: datetime | None = None
         self._ev_charging_active: bool = False
         self._ev_target_amps: int = 0
@@ -372,7 +393,10 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 self._battery_lock_active = False
                 self._battery_low_power_since = None
 
-        await self._async_sync_battery_lock(ev_power=ev_power)
+        if self.master_control_enabled:
+            await self._async_sync_battery_lock(ev_power=ev_power)
+            if self.battery_control_enabled:
+                await self._async_update_battery_power(now_utc=now_utc, grid_raw=grid_raw, battery_soc=battery_soc)
 
         # Pre-read hot water state for priority determination
         water_temp = self._read_water_temperature()
@@ -432,38 +456,39 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             dhw_yield = ev_can_or_is_charging or self._ac_buffer_active
 
         # C2. Stage 2b: Domestic Hot Water (DHW) Heat Pump Control
-        await self._async_update_dhw(
-            now_local=now_local,
-            grid_filtered=grid_filtered,
-            surplus_power=surplus_power,
-            battery_priority_active=battery_priority_active,
-            yield_to_higher_priority=dhw_yield,
-            water_temp=water_temp,
-        )
+        if self.master_control_enabled:
+            await self._async_update_dhw(
+                now_local=now_local,
+                grid_filtered=grid_filtered,
+                surplus_power=surplus_power,
+                battery_priority_active=battery_priority_active,
+                yield_to_higher_priority=dhw_yield,
+                water_temp=water_temp,
+            )
 
-        # B. Stage 3: Thermal AC Buffer
-        await self._async_update_ac_buffer(
-            now_utc=now_utc,
-            surplus_power=surplus_power,
-            battery_priority_active=battery_priority_active,
-            yield_to_higher_priority=ac_yield,
-            in_deadband=in_deadband,
-        )
+            # B. Stage 3: Thermal AC Buffer
+            await self._async_update_ac_buffer(
+                now_utc=now_utc,
+                surplus_power=surplus_power,
+                battery_priority_active=battery_priority_active,
+                yield_to_higher_priority=ac_yield,
+                in_deadband=in_deadband,
+            )
 
-        # D. Stage 4: 1-Phase Tesla Charging Control
-        await self._async_update_ev_charging(
-            now_utc=now_utc,
-            grid_filtered=grid_filtered,
-            surplus_power=surplus_power,
-            ev_power=ev_power,
-            ev_soc=ev_soc,
-            ev_ready_at_home=ev_ready_at_home,
-            ev_plugged=ev_plugged,
-            battery_priority_active=battery_priority_active,
-            battery_soc=battery_soc,
-            yield_to_higher_priority=ev_yield,
-            in_deadband=in_deadband,
-        )
+            # D. Stage 4: 1-Phase Tesla Charging Control
+            await self._async_update_ev_charging(
+                now_utc=now_utc,
+                grid_filtered=grid_filtered,
+                surplus_power=surplus_power,
+                ev_power=ev_power,
+                ev_soc=ev_soc,
+                ev_ready_at_home=ev_ready_at_home,
+                ev_plugged=ev_plugged,
+                battery_priority_active=battery_priority_active,
+                battery_soc=battery_soc,
+                yield_to_higher_priority=ev_yield,
+                in_deadband=in_deadband,
+            )
 
         # E. EV Charging Session Tracking & Energy Split
         ev_solar_w, ev_grid_w, completed_session = self.session_tracker.update(
@@ -514,6 +539,10 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "tesla_max_current": self.tesla_max_current,
             "tesla_target_soc": self.tesla_target_soc,
             "charging_mode": self.charging_mode,
+            "master_control_enabled": self.master_control_enabled,
+            "battery_control_enabled": self.battery_control_enabled,
+            "battery_target_power": self._battery_target_power,
+            "battery_target_mode": self._battery_target_mode,
             "ac_buffer_enabled": self.ac_buffer_enabled,
             "ac_auto_heat_enabled": self.ac_auto_heat_enabled,
             "ac_buffer_active": self._ac_buffer_active,
@@ -1014,13 +1043,22 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         if domain == "select":
             state = self.hass.states.get(entity_id)
             target_option = "charge" if self._battery_lock_active else "discharge"
+            if (
+                not self._battery_lock_active
+                and self.battery_control_enabled
+                and bool(self.resolve_battery_power_control_number())
+            ):
+                return
             if state is not None and state.state != target_option:
-                await self.hass.services.async_call(
-                    "select",
-                    "select_option",
-                    {ATTR_ENTITY_ID: entity_id, "option": target_option},
-                    blocking=False,
-                )
+                try:
+                    await self.hass.services.async_call(
+                        "select",
+                        "select_option",
+                        {ATTR_ENTITY_ID: entity_id, "option": target_option},
+                        blocking=False,
+                    )
+                except HomeAssistantError as err:
+                    LOGGER.warning("Failed to set battery lock option on %s: %s", entity_id, err)
                 self.record_trace(
                     category="battery",
                     action=f"Speichermodus auf '{target_option}' gesetzt",
@@ -1033,12 +1071,15 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             return
         is_currently_on = self._read_bool(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
         if self._battery_lock_active and not is_currently_on:
-            await self.hass.services.async_call(
-                domain,
-                SERVICE_TURN_ON,
-                {ATTR_ENTITY_ID: entity_id},
-                blocking=False,
-            )
+            try:
+                await self.hass.services.async_call(
+                    domain,
+                    SERVICE_TURN_ON,
+                    {ATTR_ENTITY_ID: entity_id},
+                    blocking=False,
+                )
+            except HomeAssistantError as err:
+                LOGGER.warning("Failed to enable battery discharge lock on %s: %s", entity_id, err)
             self.record_trace(
                 category="battery",
                 action="Batterie-Entladesperre aktiviert",
@@ -1048,12 +1089,15 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 details={"ev_power_watts": ev_power, "threshold_watts": self.battery_lock_threshold_watts},
             )
         elif not self._battery_lock_active and is_currently_on:
-            await self.hass.services.async_call(
-                domain,
-                SERVICE_TURN_OFF,
-                {ATTR_ENTITY_ID: entity_id},
-                blocking=False,
-            )
+            try:
+                await self.hass.services.async_call(
+                    domain,
+                    SERVICE_TURN_OFF,
+                    {ATTR_ENTITY_ID: entity_id},
+                    blocking=False,
+                )
+            except HomeAssistantError as err:
+                LOGGER.warning("Failed to disable battery discharge lock on %s: %s", entity_id, err)
             self.record_trace(
                 category="battery",
                 action="Batterie-Entladesperre aufgehoben",
@@ -1062,6 +1106,387 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 value="off",
                 details={"ev_power_watts": ev_power},
             )
+
+    def _get_number_max(self, entity_id: str, default: float = 3200.0) -> float:
+        """Read maximum value from a number entity state attributes."""
+        st = self.hass.states.get(entity_id)
+        if st is not None:
+            max_attr = st.attributes.get("max")
+            if max_attr is not None:
+                try:
+                    return float(max_attr)
+                except ValueError, TypeError:
+                    pass
+        return default
+
+    def _get_number_max_discharge(self, entity_id: str, default: float = 3000.0) -> float:
+        """Read max discharge power attribute or fallback to max."""
+        st = self.hass.states.get(entity_id)
+        if st is not None:
+            max_discharge = st.attributes.get("max_discharge_power")
+            if max_discharge is not None:
+                try:
+                    return float(max_discharge)
+                except ValueError, TypeError:
+                    pass
+            max_attr = st.attributes.get("max")
+            if max_attr is not None:
+                try:
+                    return float(max_attr)
+                except ValueError, TypeError:
+                    pass
+        return default
+
+    def resolve_battery_power_control_number(self) -> str | None:
+        """Return configured or auto-discovered battery power control number entity."""
+        configured = self.config_entry.data.get(CONF_BATTERY_POWER_CONTROL_NUMBER)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        for ref_key in (CONF_BATTERY_SOC_SENSOR, CONF_BATTERY_DISCHARGE_LOCK_SWITCH, CONF_BATTERY_POWER_SENSOR):
+            ref_entity = self.config_entry.data.get(ref_key)
+            if not ref_entity:
+                continue
+            base = ref_entity.split(".", 1)[-1]
+            for suffix in ("_soc", "_leistungsfluss", "_power", "_discharge_disabled", "_switch"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            for candidate in (
+                f"number.{base}_leistungssteuerung",
+                f"number.{base}_power_control",
+            ):
+                if self.hass.states.get(candidate) is not None:
+                    return candidate
+
+        for fallback in (
+            "number.anker_solix_solarbank_max_ac_345_leistungssteuerung",
+            "number.solarbank_leistungssteuerung",
+            "number.sim_anker_solix_solarbank_max_ac_345_leistungssteuerung",
+        ):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    def resolve_battery_flow_select(self) -> str | None:
+        """Return configured or auto-discovered battery flow select entity."""
+        configured = self.config_entry.data.get(CONF_BATTERY_FLOW_SELECT)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        lock_entity = self.config_entry.data.get(CONF_BATTERY_DISCHARGE_LOCK_SWITCH)
+        if lock_entity and lock_entity.startswith("select.") and self.hass.states.get(lock_entity) is not None:
+            return lock_entity
+
+        for ref_key in (CONF_BATTERY_SOC_SENSOR, CONF_BATTERY_POWER_SENSOR):
+            ref_entity = self.config_entry.data.get(ref_key)
+            if not ref_entity:
+                continue
+            base = ref_entity.split(".", 1)[-1]
+            for suffix in ("_soc", "_power"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            for candidate in (
+                f"select.{base}_leistungsfluss",
+                f"select.{base}_flow",
+            ):
+                if self.hass.states.get(candidate) is not None:
+                    return candidate
+
+        for fallback in (
+            "select.anker_solix_solarbank_max_ac_345_leistungsfluss",
+            "select.solarbank_leistungsfluss",
+            "select.sim_anker_solix_solarbank_max_ac_345_leistungsfluss",
+        ):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    def resolve_battery_charge_power_sensor(self) -> str | None:
+        """Return configured or auto-discovered battery charge power sensor."""
+        configured = self.config_entry.data.get(CONF_BATTERY_CHARGE_POWER_SENSOR)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        for ref_key in (CONF_BATTERY_SOC_SENSOR, CONF_BATTERY_POWER_SENSOR):
+            ref_entity = self.config_entry.data.get(ref_key)
+            if not ref_entity:
+                continue
+            base = ref_entity.split(".", 1)[-1]
+            for suffix in ("_soc", "_power"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            candidate = f"sensor.{base}_batterieladeleistung"
+            if self.hass.states.get(candidate) is not None:
+                return candidate
+
+        for fallback in (
+            "sensor.anker_solix_solarbank_max_ac_345_batterieladeleistung",
+            "sensor.solarbank_batterieladeleistung",
+            "sensor.sim_anker_solix_solarbank_max_ac_345_batterieladeleistung",
+        ):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    def resolve_battery_discharge_power_sensor(self) -> str | None:
+        """Return configured or auto-discovered battery discharge power sensor."""
+        configured = self.config_entry.data.get(CONF_BATTERY_DISCHARGE_POWER_SENSOR)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        for ref_key in (CONF_BATTERY_SOC_SENSOR, CONF_BATTERY_POWER_SENSOR):
+            ref_entity = self.config_entry.data.get(ref_key)
+            if not ref_entity:
+                continue
+            base = ref_entity.split(".", 1)[-1]
+            for suffix in ("_soc", "_power"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            candidate = f"sensor.{base}_batterieentladeleistung"
+            if self.hass.states.get(candidate) is not None:
+                return candidate
+
+        for fallback in (
+            "sensor.anker_solix_solarbank_max_ac_345_batterieentladeleistung",
+            "sensor.solarbank_batterieentladeleistung",
+            "sensor.sim_anker_solix_solarbank_max_ac_345_batterieentladeleistung",
+        ):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    def resolve_battery_min_soc_number(self) -> str | None:
+        """Return configured or auto-discovered battery discharge min SoC number entity."""
+        configured = self.config_entry.data.get(CONF_BATTERY_MIN_SOC_NUMBER)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        for fallback in (
+            "number.anker_solix_solarbank_max_ac_345_entladegrenze",
+            "number.solarbank_entladegrenze",
+        ):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    def resolve_battery_max_soc_number(self) -> str | None:
+        """Return configured or auto-discovered battery charge max SoC number entity."""
+        configured = self.config_entry.data.get(CONF_BATTERY_MAX_SOC_NUMBER)
+        if configured and self.hass.states.get(configured) is not None:
+            return configured
+
+        for fallback in (
+            "number.anker_solix_solarbank_max_ac_345_ladeobergrenze",
+            "number.solarbank_ladeobergrenze",
+        ):
+            if self.hass.states.get(fallback) is not None:
+                return fallback
+
+        return None
+
+    async def _async_update_battery_power(
+        self,
+        *,
+        now_utc: datetime,
+        grid_raw: float,
+        battery_soc: float | None,
+    ) -> None:
+        """Dynamically regulate home battery charge/discharge to achieve zero grid export/import."""
+        if not self.master_control_enabled or not self.battery_control_enabled:
+            return
+
+        power_control_entity = self.resolve_battery_power_control_number()
+        flow_select_entity = self.resolve_battery_flow_select()
+        if not power_control_entity or not flow_select_entity:
+            return
+
+        flow_st = self.hass.states.get(flow_select_entity)
+        if flow_st is None:
+            return
+        cur_mode = str(flow_st.state).lower()
+
+        power_st = self.hass.states.get(power_control_entity)
+        try:
+            cur_set = (
+                float(power_st.state) if power_st and power_st.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN) else 0.0
+            )
+        except ValueError, TypeError:
+            cur_set = 0.0
+
+        charge_sensor = self.resolve_battery_charge_power_sensor()
+        discharge_sensor = self.resolve_battery_discharge_power_sensor()
+
+        real_charge: float | None = self._read_entity_watts(charge_sensor) if charge_sensor else None
+        real_discharge: float | None = self._read_entity_watts(discharge_sensor) if discharge_sensor else None
+
+        if real_charge is None or real_discharge is None:
+            signed_power = self._read_battery_signed_power()
+            real_charge = max(0.0, -signed_power)
+            real_discharge = max(0.0, signed_power)
+            if real_charge <= 10.0 and real_discharge <= 10.0 and cur_set > 0.0:
+                real_charge = cur_set if cur_mode == "charge" else 0.0
+                real_discharge = cur_set if cur_mode == "discharge" else 0.0
+
+        real_charge = abs(real_charge or 0.0)
+        real_discharge = abs(real_discharge or 0.0)
+
+        if real_charge > 10.0:
+            cur_bat_signed = -real_charge
+        elif real_discharge > 10.0:
+            cur_bat_signed = real_discharge
+        else:
+            cur_bat_signed = 0.0
+
+        raw_target = cur_bat_signed + grid_raw
+
+        min_soc_entity = self.resolve_battery_min_soc_number()
+        min_soc = self._read_entity_watts(min_soc_entity) if min_soc_entity else BATTERY_DEFAULT_MIN_SOC
+        if min_soc is None:
+            min_soc = BATTERY_DEFAULT_MIN_SOC
+
+        max_soc_entity = self.resolve_battery_max_soc_number()
+        max_soc = self._read_entity_watts(max_soc_entity) if max_soc_entity else BATTERY_DEFAULT_MAX_SOC
+        if max_soc is None:
+            max_soc = BATTERY_DEFAULT_MAX_SOC
+
+        soc = battery_soc if battery_soc is not None else 50.0
+
+        if raw_target < -(BATTERY_CONTROL_MIN_POWER + BATTERY_CONTROL_PUFFER_CHARGE) and soc < max_soc:
+            target_mode = "charge"
+        elif (
+            raw_target > (BATTERY_CONTROL_MIN_POWER + BATTERY_CONTROL_PUFFER_DISCHARGE)
+            and soc > min_soc
+            and not self._battery_lock_active
+        ):
+            target_mode = "discharge"
+        else:
+            target_mode = "stop"
+
+        max_charge = self._get_number_max(power_control_entity, default=BATTERY_DEFAULT_MAX_CHARGE)
+        max_discharge = self._get_number_max_discharge(power_control_entity, default=BATTERY_DEFAULT_MAX_DISCHARGE)
+
+        if target_mode == "charge":
+            target_power = round(min(max(abs(raw_target) - BATTERY_CONTROL_PUFFER_CHARGE, 0.0), max_charge))
+        elif target_mode == "discharge":
+            target_power = round(min(max(raw_target - BATTERY_CONTROL_PUFFER_DISCHARGE, 0.0), max_discharge))
+        else:
+            target_power = 0.0
+
+        self._battery_target_power = target_power
+        self._battery_target_mode = target_mode
+
+        if target_mode == "stop":
+            if cur_set > 0.0:
+                try:
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {ATTR_ENTITY_ID: power_control_entity, "value": 0},
+                        blocking=False,
+                    )
+                except HomeAssistantError as err:
+                    LOGGER.warning("Failed to stop battery power on %s: %s", power_control_entity, err)
+                self.record_trace(
+                    category="battery",
+                    action="Speicherleistung gestoppt (0 W)",
+                    reason="Leistungsbedarf unter Schwelle oder Entladesperre aktiv",
+                    target=power_control_entity,
+                    value="0 W",
+                    details={"raw_target": round(raw_target, 1), "cur_set": cur_set},
+                )
+                self._last_battery_adjustment = now_utc
+            return
+
+        should_adjust = False
+        reason = ""
+
+        if abs(grid_raw) > BATTERY_CONTROL_DEADBAND:
+            if abs(target_power - cur_set) >= BATTERY_CONTROL_MIN_CHANGE or cur_mode != target_mode:
+                should_adjust = True
+                reason = f"Delta-Regelung: Netz ({grid_raw:+.0f} W) > Totzone (±{BATTERY_CONTROL_DEADBAND:.0f} W)"
+        else:
+            elapsed = (
+                (now_utc - self._last_battery_adjustment).total_seconds()
+                if self._last_battery_adjustment is not None
+                else 999.0
+            )
+            if elapsed >= BATTERY_CONTROL_FINE_TUNE_SECONDS and (
+                abs(target_power - cur_set) >= 5.0 or cur_mode != target_mode
+            ):
+                should_adjust = True
+                reason = f"Totzonen-Feinabgleich (nach {elapsed:.0f}s, Netz: {grid_raw:+.0f} W)"
+
+        if should_adjust:
+            if cur_mode != target_mode:
+                try:
+                    await self.hass.services.async_call(
+                        "select",
+                        "select_option",
+                        {ATTR_ENTITY_ID: flow_select_entity, "option": target_mode},
+                        blocking=False,
+                    )
+                except HomeAssistantError as err:
+                    LOGGER.warning(
+                        "Failed to set battery flow mode to %s on %s: %s", target_mode, flow_select_entity, err
+                    )
+
+            try:
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {ATTR_ENTITY_ID: power_control_entity, "value": target_power},
+                    blocking=False,
+                )
+            except HomeAssistantError as err:
+                LOGGER.warning("Failed to set battery power to %s W on %s: %s", target_power, power_control_entity, err)
+
+            self._last_battery_adjustment = now_utc
+            self.record_trace(
+                category="battery",
+                action=f"Speicherleistung auf {target_power:.0f} W ({target_mode}) angepasst",
+                reason=reason,
+                target=power_control_entity,
+                value=f"{target_power:.0f} W",
+                details={
+                    "raw_target_watts": round(raw_target, 1),
+                    "grid_watts": round(grid_raw, 1),
+                    "target_mode": target_mode,
+                    "previous_set_watts": cur_set,
+                },
+            )
+
+    async def async_set_master_control_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable Energiemanager master automated control."""
+        self.master_control_enabled = enabled
+        self.record_trace(
+            category="system",
+            action="Gesamtsteuerung aktiviert" if enabled else "Gesamtsteuerung deaktiviert",
+            reason="Vom Nutzer umgeschaltet",
+            target="master_control",
+            value="on" if enabled else "off",
+        )
+        await self.async_refresh()
+
+    async def async_set_battery_control_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable home battery zero-feed-in / zero-import power regulation."""
+        self.battery_control_enabled = enabled
+        self.record_trace(
+            category="battery",
+            action="Speicher-Regelung aktiviert" if enabled else "Speicher-Regelung deaktiviert",
+            reason="Vom Nutzer umgeschaltet",
+            target="battery_control",
+            value="on" if enabled else "off",
+        )
+        await self.async_refresh()
 
     async def _async_trigger_ev_wakeup(self) -> None:
         """Press the BLE wake-up button before starting a charging session."""

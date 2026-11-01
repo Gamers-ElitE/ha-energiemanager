@@ -1247,6 +1247,8 @@ class SamEnergiemanagerPanel extends HTMLElement {
       battery_reserve_soc: ['number.energiemanager_battery_priority_reserve_soc', 'number.sam_energiemanager_battery_reserve_soc'],
       tesla_max_current: ['number.energiemanager_tesla_maximum_charging_current', 'number.sam_energiemanager_tesla_max_current'],
       tesla_target_soc: ['number.energiemanager_tesla_fast_charge_target_soc', 'number.sam_energiemanager_tesla_target_soc'],
+      master_control_enabled: ['switch.energiemanager_energiemanager_master_control', 'switch.energiemanager_master_control', 'switch.sam_energiemanager_master_control_enabled'],
+      battery_control_enabled: ['switch.energiemanager_battery_zero_feed_in_regulation', 'switch.energiemanager_battery_control', 'switch.sam_energiemanager_battery_control_enabled'],
       ac_buffer_enabled: ['switch.energiemanager_thermal_ac_buffer_enabled', 'switch.sam_energiemanager_ac_buffer_enabled'],
       ac_auto_heat_enabled: ['switch.energiemanager_ac_auto_start_heating_when_off', 'switch.sam_energiemanager_ac_auto_heat_enabled'],
       dhw_enabled: ['switch.energiemanager_hot_water_heat_pump_auto_control', 'switch.sam_energiemanager_dhw_enabled'],
@@ -1555,6 +1557,12 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const maxAmps = this._num('tesla_max_current', 13);
     const targetSoc = this._num('tesla_target_soc', 80);
     const mode = this._val('charging_mode', 'pv_surplus');
+    const masterEnabled = this._bool('master_control_enabled', true);
+    const batControlEnabled = this._bool('battery_control_enabled', true);
+    const homePowerObj = this._stateObj('home_power_watts');
+    const homePowerAttrs = homePowerObj && homePowerObj.attributes ? homePowerObj.attributes : {};
+    const batTargetPower = Number(homePowerAttrs.battery_target_power || 0);
+    const batTargetMode = homePowerAttrs.battery_target_mode || 'stop';
     const acEnabled = this._bool('ac_buffer_enabled');
     const acAutoHeat = this._bool('ac_auto_heat_enabled');
     const acMaxOutdoor = this._num('ac_auto_heat_max_outdoor_temp', 11.0);
@@ -1649,10 +1657,20 @@ class SamEnergiemanagerPanel extends HTMLElement {
       </div>
 
       <!-- Unified Animated Energy Flow & Priority Diagram Card -->
+      ${!masterEnabled ? `
+        <div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--em-danger, #ef4444);font-weight:600">
+          <span>⏸️ Gesamtsteuerung pausiert – Alle automatischen Schaltungen sind deaktiviert.</span>
+          <button class="em-btn primary" data-action="toggle-master" style="padding:4px 12px;font-size:12px">Aktivieren</button>
+        </div>
+      ` : ''}
+
       <div class="em-card">
         <div class="em-card-head">
           <div class="em-card-title">⚡ Live-Energiefluss & Kaskaden-Status</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span class="em-badge ${masterEnabled ? 'em-badge-ok' : 'em-badge-warn'}">
+              ${masterEnabled ? '⚡ Steuerung aktiv' : '⏸️ Steuerung pausiert'}
+            </span>
             <span class="em-badge ${batLock ? 'em-badge-warn' : 'em-badge-ok'}">
               ${batLock ? '🔒 Anker Entladesperre aktiv' : '🔓 Anker Entladung frei'}
             </span>
@@ -1741,7 +1759,9 @@ class SamEnergiemanagerPanel extends HTMLElement {
                   </div>
                   <div class="em-node-sub">
                     <strong>${batPowerLabel}</strong><br>
-                    ${batPriorityActive ? `Vorrang bis ${_fmtNum(reserveSoc, 0)} %` : `Reserve (${_fmtNum(reserveSoc, 0)} %) erreicht`}
+                    ${batControlEnabled && batTargetMode !== 'stop'
+                      ? (batTargetMode === 'charge' ? `⚡ Laden: ${_fmtNum(batTargetPower, 0)} W` : `⚡ Entladen: ${_fmtNum(batTargetPower, 0)} W`)
+                      : (batPriorityActive ? `Vorrang bis ${_fmtNum(reserveSoc, 0)} %` : `Reserve (${_fmtNum(reserveSoc, 0)} %) erreicht`)}
                   </div>
                 </div>
               </div>
@@ -1750,7 +1770,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
                   ${batLock ? '🔒 Entladesperre aktiv' : '🔓 Entladung frei'}
                 </span>
                 <span class="em-pill">
-                  ${batPriorityActive ? '⏳ Verbraucher warten' : '✅ Überschuss freigegeben'}
+                  ${batControlEnabled ? (batTargetMode === 'charge' ? '⚡ Lädt Überschuss' : batTargetMode === 'discharge' ? '🔋 Stützt Netzbezug' : 'Standby (0 W)') : (batPriorityActive ? '⏳ Verbraucher warten' : '✅ Überschuss freigegeben')}
                 </span>
               </div>
             </div>
@@ -1929,6 +1949,26 @@ class SamEnergiemanagerPanel extends HTMLElement {
 
           <!-- DHW & AC Buffer Switches & Quick Actions -->
           <div class="em-ctrl-box" style="justify-content:space-between">
+            <div class="em-switch-row" style="padding-bottom:6px;border-bottom:1px solid var(--divider-color, rgba(127,127,127,0.12))">
+              <div>
+                <div class="em-ctrl-lbl" style="font-weight:700">⚡ Gesamtsteuerung aktiv</div>
+                <div class="em-hint">Automatische Steuerung aller Verbraucher & Speicher.</div>
+              </div>
+              <label class="em-switch">
+                <input type="checkbox" data-switch="master_control_enabled" ${masterEnabled ? 'checked' : ''}>
+                <span class="em-switch-track"></span>
+              </label>
+            </div>
+            <div class="em-switch-row" style="padding-bottom:6px;border-bottom:1px solid var(--divider-color, rgba(127,127,127,0.12))">
+              <div>
+                <div class="em-ctrl-lbl">🔋 Anker Nulleinspeisung / Nullbezug</div>
+                <div class="em-hint">Dynamische Speicherregelung (Leistungsfluss & Watt).</div>
+              </div>
+              <label class="em-switch">
+                <input type="checkbox" data-switch="battery_control_enabled" ${batControlEnabled ? 'checked' : ''}>
+                <span class="em-switch-track"></span>
+              </label>
+            </div>
             <div class="em-switch-row">
               <div>
                 <div class="em-ctrl-lbl">🚿 Warmwasser-WP Automatik</div>
@@ -2468,6 +2508,10 @@ class SamEnergiemanagerPanel extends HTMLElement {
           } catch {
             this._showToast('Kopieren fehlgeschlagen');
           }
+        } else if (act === 'toggle-master') {
+          const eid = this._entId('master_control_enabled') || 'switch.energiemanager_master_control';
+          await this._hass.callService('switch', 'turn_on', { entity_id: eid });
+          this._showToast('Gesamtsteuerung aktiviert');
         } else if (act === 'clear-traces') {
           await this._hass.callService('sam_energiemanager', 'clear_traces', {});
           this._showToast('Traces geleert');

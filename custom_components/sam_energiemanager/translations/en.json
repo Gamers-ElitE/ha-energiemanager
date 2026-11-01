@@ -8,6 +8,12 @@
           "grid_power_sensor": "Grid power sensor",
           "battery_soc_sensor": "Home battery SOC sensor",
           "battery_discharge_lock_switch": "Home battery discharge lock switch",
+          "battery_power_control_number": "Home battery power setpoint number entity",
+          "battery_flow_select": "Home battery flow mode select entity",
+          "battery_charge_power_sensor": "Home battery charge power sensor",
+          "battery_discharge_power_sensor": "Home battery discharge power sensor",
+          "battery_min_soc_number": "Home battery discharge limit number entity",
+          "battery_max_soc_number": "Home battery charge limit number entity",
           "ev_power_sensor": "EV charging power sensor",
           "ev_soc_sensor": "EV battery SOC sensor",
           "ev_plugged_binary_sensor": "EV plugged-in status sensor",
@@ -29,6 +35,12 @@
           "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
           "battery_soc_sensor": "State of charge sensor (0-100%) of the home battery (e.g. Anker Solarbank).",
           "battery_discharge_lock_switch": "Switch entity that locks home battery discharge while the EV is charging.",
+          "battery_power_control_number": "Number entity controlling active battery charge/discharge power (e.g. number.anker_solix_..._leistungssteuerung).",
+          "battery_flow_select": "Select entity controlling battery power direction (charge/discharge, e.g. select.anker_solix_..._leistungsfluss).",
+          "battery_charge_power_sensor": "Sensor measuring real-time battery charging power in watts.",
+          "battery_discharge_power_sensor": "Sensor measuring real-time battery discharging power in watts.",
+          "battery_min_soc_number": "Optional number entity defining discharge cutoff percentage (e.g. number.anker_solix_..._entladegrenze).",
+          "battery_max_soc_number": "Optional number entity defining charge upper limit percentage (e.g. number.anker_solix_..._ladeobergrenze).",
           "ev_power_sensor": "Current EV charging power in watts.",
           "ev_soc_sensor": "Current state of charge (0-100%) of the EV battery.",
           "ev_plugged_binary_sensor": "Sensor indicating whether the charging cable is connected.",
@@ -54,6 +66,12 @@
           "grid_power_sensor": "Grid power sensor",
           "battery_soc_sensor": "Home battery SOC sensor",
           "battery_discharge_lock_switch": "Home battery discharge lock switch",
+          "battery_power_control_number": "Home battery power setpoint number entity",
+          "battery_flow_select": "Home battery flow mode select entity",
+          "battery_charge_power_sensor": "Home battery charge power sensor",
+          "battery_discharge_power_sensor": "Home battery discharge power sensor",
+          "battery_min_soc_number": "Home battery discharge limit number entity",
+          "battery_max_soc_number": "Home battery charge limit number entity",
           "ev_power_sensor": "EV charging power sensor",
           "ev_soc_sensor": "EV battery SOC sensor",
           "ev_plugged_binary_sensor": "EV plugged-in status sensor",
@@ -75,6 +93,12 @@
           "grid_power_sensor": "Power sensor at the grid meter in watts (negative = export, positive = import).",
           "battery_soc_sensor": "State of charge sensor (0-100%) of the home battery (e.g. Anker Solarbank).",
           "battery_discharge_lock_switch": "Switch entity that locks home battery discharge while the EV is charging.",
+          "battery_power_control_number": "Number entity controlling active battery charge/discharge power (e.g. number.anker_solix_..._leistungssteuerung).",
+          "battery_flow_select": "Select entity controlling battery power direction (charge/discharge, e.g. select.anker_solix_..._leistungsfluss).",
+          "battery_charge_power_sensor": "Sensor measuring real-time battery charging power in watts.",
+          "battery_discharge_power_sensor": "Sensor measuring real-time battery discharging power in watts.",
+          "battery_min_soc_number": "Optional number entity defining discharge cutoff percentage (e.g. number.anker_solix_..._entladegrenze).",
+          "battery_max_soc_number": "Optional number entity defining charge upper limit percentage (e.g. number.anker_solix_..._ladeobergrenze).",
           "ev_power_sensor": "Current EV charging power in watts.",
           "ev_soc_sensor": "Current state of charge (0-100%) of the EV battery.",
           "ev_plugged_binary_sensor": "Sensor indicating whether the charging cable is connected.",
@@ -277,6 +301,12 @@
       }
     },
     "switch": {
+      "master_control_enabled": {
+        "name": "Energiemanager master control"
+      },
+      "battery_control_enabled": {
+        "name": "Battery zero-feed-in regulation"
+      },
       "ac_buffer_enabled": {
         "name": "Thermal AC buffer enabled"
       },
