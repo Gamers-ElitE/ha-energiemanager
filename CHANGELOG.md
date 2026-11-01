@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.3](https://github.com/Gamers-ElitE/ha-energiemanager/compare/v0.1.2...v0.1.3) (2026-11-01)
+
+
+### Features
+
+* **coordinator:** add active battery regulation and master control ([6c9d3a0](https://github.com/Gamers-ElitE/ha-energiemanager/commit/6c9d3a0ccef52027dd327a0bea644c55887b8aa8))
+
+
+### Bug Fixes
+
+* **panel:** accurately reflect battery power flow and direction in svg animation ([72ac9db](https://github.com/Gamers-ElitE/ha-energiemanager/commit/72ac9db0a8f92a62f01d875317128dbd0058cfbf))
+* **panel:** prevent mobile tab scroll reset and preserve DOM on updates ([2168742](https://github.com/Gamers-ElitE/ha-energiemanager/commit/2168742d7558690c81618b734a0171d8d1457860))
+
 ## [0.1.2](https://github.com/Gamers-ElitE/ha-energiemanager/compare/v0.1.1...v0.1.2) (2026-10-31)
 
 
