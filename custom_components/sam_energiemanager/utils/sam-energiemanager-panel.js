@@ -1135,10 +1135,22 @@ class SamEnergiemanagerPanel extends HTMLElement {
     this._hass = null;
     this._initialized = false;
     this._tab = 'overview';
+    this._traceFilter = 'all';
     this._entityMap = null;
-    this._toast = null;
     this._toastTimer = null;
     this._updateThrottle = null;
+    this._deferredUpdateTimer = null;
+    this._lastRelevantStates = null;
+    this._isInteracting = false;
+    this._pendingUpdate = false;
+
+    // Persistent DOM elements
+    this._container = null;
+    this._headerEl = null;
+    this._mainEl = null;
+    this._tabsEl = null;
+    this._contentEl = null;
+    this._toastSlot = null;
   }
 
   set hass(hass) {
@@ -1149,25 +1161,30 @@ class SamEnergiemanagerPanel extends HTMLElement {
       this._boot();
       return;
     }
-    if (this._initialized && !this._updateThrottle) {
+    if (!this._initialized) return;
+
+    // Fast-path dirty check: Ignore updates from unrelated home entities
+    if (!this._hasRelevantChanges(hass)) {
+      return;
+    }
+
+    this._cacheRelevantStates(hass);
+
+    // If user is actively interacting (touching, dragging, typing, text selected), defer update
+    if (this._userIsActive()) {
+      this._pendingUpdate = true;
+      return;
+    }
+
+    if (!this._updateThrottle) {
       this._updateThrottle = setTimeout(() => {
         this._updateThrottle = null;
-        this._discoverEntities();
-        // Avoid clobbering an active slider drag or number input focus
-        const active = this.shadowRoot && this.shadowRoot.activeElement;
-        if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
+        if (this._userIsActive()) {
+          this._pendingUpdate = true;
           return;
         }
-        // Avoid clobbering mouse dragging or active text selection
-        if (this._isMouseDown) {
-          return;
-        }
-        const sel = (this.shadowRoot && this.shadowRoot.getSelection ? this.shadowRoot.getSelection() : null) || window.getSelection();
-        if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
-          return;
-        }
-        this._render();
-      }, 400);
+        this._performUpdate();
+      }, 250);
     }
   }
 
@@ -1182,10 +1199,24 @@ class SamEnergiemanagerPanel extends HTMLElement {
   connectedCallback() {
     this._onResize = () => this._syncPanelHeight();
     window.addEventListener('resize', this._onResize);
-    this._onMouseDown = () => { this._isMouseDown = true; };
-    this._onMouseUp = () => { this._isMouseDown = false; };
+
+    this._onMouseDown = () => { this._isInteracting = true; };
+    this._onMouseUp = () => {
+      this._isInteracting = false;
+      this._checkDeferredUpdate();
+    };
     window.addEventListener('mousedown', this._onMouseDown);
     window.addEventListener('mouseup', this._onMouseUp);
+
+    this._onTouchStart = () => { this._isInteracting = true; };
+    this._onTouchEnd = () => {
+      this._isInteracting = false;
+      this._checkDeferredUpdate();
+    };
+    window.addEventListener('touchstart', this._onTouchStart, { passive: true });
+    window.addEventListener('touchend', this._onTouchEnd, { passive: true });
+    window.addEventListener('touchcancel', this._onTouchEnd, { passive: true });
+
     requestAnimationFrame(() => this._syncPanelHeight());
   }
 
@@ -1200,10 +1231,64 @@ class SamEnergiemanagerPanel extends HTMLElement {
       this._onMouseDown = null;
       this._onMouseUp = null;
     }
+    if (this._onTouchStart) {
+      window.removeEventListener('touchstart', this._onTouchStart);
+      window.removeEventListener('touchend', this._onTouchEnd);
+      window.removeEventListener('touchcancel', this._onTouchEnd);
+      this._onTouchStart = null;
+      this._onTouchEnd = null;
+    }
     if (this._updateThrottle) {
       clearTimeout(this._updateThrottle);
       this._updateThrottle = null;
     }
+    if (this._deferredUpdateTimer) {
+      clearTimeout(this._deferredUpdateTimer);
+      this._deferredUpdateTimer = null;
+    }
+    if (this._toastTimer) {
+      clearTimeout(this._toastTimer);
+      this._toastTimer = null;
+    }
+  }
+
+  _userIsActive() {
+    if (this._isInteracting) return true;
+    const active = this.shadowRoot && this.shadowRoot.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA')) {
+      return true;
+    }
+    const winSel = window.getSelection();
+    if (winSel && !winSel.isCollapsed && winSel.toString().trim().length > 0) {
+      return true;
+    }
+    if (this.shadowRoot && this.shadowRoot.getSelection) {
+      const shadowSel = this.shadowRoot.getSelection();
+      if (shadowSel && !shadowSel.isCollapsed && shadowSel.toString().trim().length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _checkDeferredUpdate() {
+    if (this._deferredUpdateTimer) {
+      clearTimeout(this._deferredUpdateTimer);
+    }
+    this._deferredUpdateTimer = setTimeout(() => {
+      this._deferredUpdateTimer = null;
+      if (this._pendingUpdate && !this._userIsActive()) {
+        this._pendingUpdate = false;
+        this._performUpdate();
+      }
+    }, 200);
+  }
+
+  _performUpdate() {
+    this._discoverEntities();
+    this._updateHeader();
+    this._renderTabs();
+    this._renderContent();
   }
 
   _syncPanelHeight() {
@@ -1221,11 +1306,91 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const style = document.createElement('style');
     style.textContent = _CSS;
     shadow.appendChild(style);
+
     this._container = document.createElement('div');
     this._container.className = 'em-root';
+
+    // 1. Persistent Header
+    this._headerEl = document.createElement('div');
+    this._headerEl.className = 'em-header';
+    this._headerEl.innerHTML = `
+      <button class="em-burger" id="em-burger" title="Seitenleiste umschalten">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>
+        </svg>
+      </button>
+      <div class="em-logo">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Energiemanager</h1>
+        <div class="em-sub">Kaskaden-Steuerung · Anker Solarbank · Multisplit-Klima · Tesla BLE</div>
+      </div>
+      <div class="em-hdr-badge">
+        <span class="em-dot" id="em-hdr-dot"></span>
+        <span id="em-hdr-badge-text">Bereit</span>
+      </div>
+      <span style="flex:1"></span>
+      <button class="em-icon-btn" id="em-hdr-recalc" data-action="recalculate" title="Regelschleife sofort neu berechnen">
+        ↻ Neu berechnen
+      </button>
+    `;
+    this._container.appendChild(this._headerEl);
+
+    // 2. Persistent Main Body & Nav
+    this._mainEl = document.createElement('div');
+    this._mainEl.className = 'em-main';
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'em-body';
+
+    const navEl = document.createElement('div');
+    navEl.className = 'em-nav';
+
+    this._tabsEl = document.createElement('div');
+    this._tabsEl.className = 'em-tabs';
+    navEl.appendChild(this._tabsEl);
+    bodyEl.appendChild(navEl);
+
+    this._contentEl = document.createElement('div');
+    this._contentEl.className = 'em-content';
+    bodyEl.appendChild(this._contentEl);
+
+    this._mainEl.appendChild(bodyEl);
+    this._container.appendChild(this._mainEl);
+
+    // 3. Persistent Toast Slot
+    this._toastSlot = document.createElement('div');
+    this._toastSlot.className = 'em-toast-slot';
+    this._container.appendChild(this._toastSlot);
+
     shadow.appendChild(this._container);
+
+    // Wire persistent header event listeners once
+    const burger = this._headerEl.querySelector('#em-burger');
+    if (burger) {
+      burger.addEventListener('click', () => {
+        this.dispatchEvent(new CustomEvent('hass-toggle-menu', { bubbles: true, composed: true }));
+      });
+    }
+    const recalc = this._headerEl.querySelector('#em-hdr-recalc');
+    if (recalc) {
+      recalc.addEventListener('click', async () => {
+        const refreshEid = this._entId('grid_power_filtered') || 'sensor.energiemanager_grid_power_filtered';
+        if (this._hass) {
+          await this._hass.callService('homeassistant', 'update_entity', { entity_id: refreshEid });
+          this._showToast('Regelschleife neu berechnet');
+        }
+      });
+    }
+
     this._discoverEntities();
-    this._render();
+    this._cacheRelevantStates(this._hass);
+    this._updateHeader();
+    this._renderTabs();
+    this._renderContent();
   }
 
   /**
@@ -1381,12 +1546,15 @@ class SamEnergiemanagerPanel extends HTMLElement {
   }
 
   _showToast(msg) {
-    this._toast = msg;
-    if (this._toastTimer) clearTimeout(this._toastTimer);
-    this._render();
+    if (!this._toastSlot) return;
+    if (this._toastTimer) {
+      clearTimeout(this._toastTimer);
+      this._toastTimer = null;
+    }
+    this._toastSlot.innerHTML = `<div class="em-toast">${_esc(msg)}</div>`;
     this._toastTimer = setTimeout(() => {
-      this._toast = null;
-      this._render();
+      if (this._toastSlot) this._toastSlot.innerHTML = '';
+      this._toastTimer = null;
     }, 2400);
   }
 
@@ -1429,21 +1597,69 @@ class SamEnergiemanagerPanel extends HTMLElement {
     this._showToast(turnOn ? 'Schalter aktiviert' : 'Schalter deaktiviert');
   }
 
-  _render() {
-    if (!this._container) return;
-    const scroller = this.shadowRoot && this.shadowRoot.querySelector('.em-main');
-    const scrollTop = scroller ? scroller.scrollTop : 0;
-
-    this._container.innerHTML = this._buildHtml();
-    this._wire();
-
-    const newScroller = this.shadowRoot && this.shadowRoot.querySelector('.em-main');
-    if (newScroller && scrollTop > 0) {
-      newScroller.scrollTop = scrollTop;
+  _getTrackedEntityIds() {
+    const ids = new Set();
+    if (this._entityMap) {
+      for (const eid of Object.values(this._entityMap)) {
+        if (eid) ids.add(eid);
+      }
     }
+    const src = this._sourceEntities();
+    for (const eid of Object.values(src)) {
+      if (eid && typeof eid === 'string') ids.add(eid);
+    }
+    if (this._hass && this._hass.states) {
+      for (const eid of Object.keys(this._hass.states)) {
+        if (
+          eid.startsWith('sensor.energiemanager_') ||
+          eid.startsWith('binary_sensor.energiemanager_') ||
+          eid.startsWith('number.energiemanager_') ||
+          eid.startsWith('select.energiemanager_') ||
+          eid.startsWith('switch.energiemanager_') ||
+          eid.startsWith('input_number.sim_') ||
+          eid.startsWith('input_boolean.sim_') ||
+          eid.includes('tesla_ble') ||
+          eid.includes('klima_')
+        ) {
+          ids.add(eid);
+        }
+      }
+    }
+    return ids;
   }
 
-  _buildHtml() {
+  _cacheRelevantStates(hass) {
+    if (!hass || !hass.states) return;
+    const cache = {};
+    const tracked = this._getTrackedEntityIds();
+    for (const eid of tracked) {
+      const st = hass.states[eid];
+      if (st) {
+        cache[eid] = {
+          state: st.state,
+          last_updated: st.last_updated,
+        };
+      }
+    }
+    this._lastRelevantStates = cache;
+  }
+
+  _hasRelevantChanges(newHass) {
+    if (!this._lastRelevantStates || !this._hass) return true;
+    const tracked = this._getTrackedEntityIds();
+    for (const eid of tracked) {
+      const oldObj = this._lastRelevantStates[eid];
+      const newSt = newHass.states && newHass.states[eid];
+      if (!oldObj && !newSt) continue;
+      if (!oldObj || !newSt) return true;
+      if (oldObj.state !== newSt.state) return true;
+      if (oldObj.last_updated !== newSt.last_updated) return true;
+    }
+    return false;
+  }
+
+  _updateHeader() {
+    if (!this._headerEl) return;
     const mode = this._val('charging_mode', 'pv_surplus');
     const evAmps = this._num('ev_target_current', 0);
     const acActive = this._bool('ac_buffer_active');
@@ -1461,9 +1677,25 @@ class SamEnergiemanagerPanel extends HTMLElement {
       statusLabel = 'Akku-Schutz aktiv';
     }
 
-    const forceBurger = this._hass && this._hass.dockedSidebar === 'always_hidden' ? ' em-burger--force' : '';
-    const hasSim = this._hasSimulator();
+    const dot = this._headerEl.querySelector('#em-hdr-dot');
+    if (dot) {
+      dot.className = `em-dot ${statusDotPulse ? 'em-pulse' : ''}`;
+    }
+    const txt = this._headerEl.querySelector('#em-hdr-badge-text');
+    if (txt && txt.textContent !== statusLabel) {
+      txt.textContent = statusLabel;
+    }
 
+    const burger = this._headerEl.querySelector('#em-burger');
+    if (burger) {
+      const forceBurger = this._hass && this._hass.dockedSidebar === 'always_hidden';
+      burger.classList.toggle('em-burger--force', !!forceBurger);
+    }
+  }
+
+  _renderTabs() {
+    if (!this._tabsEl) return;
+    const hasSim = this._hasSimulator();
     const tabs = [
       { id: 'overview', label: '⚡ Energiefluss & Steuerung' },
       { id: 'sessions', label: '📊 Ladebilanz & Sitzungen' },
@@ -1474,12 +1706,48 @@ class SamEnergiemanagerPanel extends HTMLElement {
       tabs.push({ id: 'simulator', label: '🧪 Test-Simulator' });
     }
 
-    const tabBtns = tabs
-      .map(
-        (t) =>
-          `<button class="em-tab ${this._tab === t.id ? 'active' : ''}" data-tab="${t.id}">${t.label}</button>`
-      )
-      .join('');
+    const existingBtns = Array.from(this._tabsEl.querySelectorAll('[data-tab]'));
+    const existingIds = existingBtns.map((b) => b.dataset.tab).join(',');
+    const newIds = tabs.map((t) => t.id).join(',');
+
+    if (existingIds === newIds) {
+      for (const btn of existingBtns) {
+        btn.classList.toggle('active', btn.dataset.tab === this._tab);
+      }
+      return;
+    }
+
+    const prevScrollLeft = this._tabsEl.scrollLeft;
+    this._tabsEl.innerHTML = '';
+    for (const t of tabs) {
+      const btn = document.createElement('button');
+      btn.className = `em-tab ${this._tab === t.id ? 'active' : ''}`;
+      btn.dataset.tab = t.id;
+      btn.textContent = t.label;
+      btn.addEventListener('click', () => {
+        if (this._tab !== t.id) {
+          this._switchTab(t.id);
+        }
+      });
+      this._tabsEl.appendChild(btn);
+    }
+    if (prevScrollLeft > 0) {
+      this._tabsEl.scrollLeft = prevScrollLeft;
+    }
+  }
+
+  _switchTab(tabId) {
+    this._tab = tabId;
+    if (this._tabsEl) {
+      const btns = this._tabsEl.querySelectorAll('[data-tab]');
+      btns.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabId));
+    }
+    this._renderContent();
+  }
+
+  _renderContent() {
+    if (!this._contentEl || !this._mainEl) return;
+    const scrollTop = this._mainEl.scrollTop;
 
     let paneHtml = '';
     if (this._tab === 'overview') paneHtml = this._htmlOverview();
@@ -1488,41 +1756,19 @@ class SamEnergiemanagerPanel extends HTMLElement {
     else if (this._tab === 'settings') paneHtml = this._htmlSettings();
     else if (this._tab === 'simulator') paneHtml = this._htmlSimulator();
 
-    return `
-      <div class="em-header">
-        <button class="em-burger${forceBurger}" id="em-burger" title="Seitenleiste umschalten">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>
-          </svg>
-        </button>
-        <div class="em-logo">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-          </svg>
-        </div>
-        <div>
-          <h1>Energiemanager</h1>
-          <div class="em-sub">Kaskaden-Steuerung · Anker Solarbank · Multisplit-Klima · Tesla BLE</div>
-        </div>
-        <div class="em-hdr-badge">
-          <span class="em-dot ${statusDotPulse ? 'em-pulse' : ''}"></span>
-          <span>${_esc(statusLabel)}</span>
-        </div>
-        <span style="flex:1"></span>
-        <button class="em-icon-btn" data-action="recalculate" title="Regelschleife sofort neu berechnen">
-          ↻ Neu berechnen
-        </button>
-      </div>
-      <div class="em-main">
-        <div class="em-body">
-          <div class="em-nav">
-            <div class="em-tabs">${tabBtns}</div>
-          </div>
-          ${paneHtml}
-        </div>
-      </div>
-      ${this._toast ? `<div class="em-toast">${_esc(this._toast)}</div>` : ''}
-    `;
+    this._contentEl.innerHTML = paneHtml;
+    this._wireContent();
+
+    if (scrollTop > 0) {
+      this._mainEl.scrollTop = scrollTop;
+    }
+  }
+
+  _getActionTraces() {
+    const traceSt = this._stateObj('last_action_trace');
+    const attrs = (traceSt && traceSt.attributes) || {};
+    const rawTraces = Array.isArray(attrs.recent_traces) ? attrs.recent_traces : [];
+    return [...rawTraces].reverse();
   }
 
   _htmlOverview() {
@@ -2359,48 +2605,42 @@ class SamEnergiemanagerPanel extends HTMLElement {
     `;
   }
 
-  _wire() {
-    const sr = this.shadowRoot;
-    if (!sr) return;
+  _wireContent() {
+    if (!this._contentEl) return;
 
-    const burger = sr.getElementById('em-burger');
-    if (burger) {
-      burger.addEventListener('click', () => {
-        this.dispatchEvent(new CustomEvent('hass-toggle-menu', { bubbles: true, composed: true }));
-      });
-    }
-
-    sr.querySelectorAll('[data-tab]').forEach((btn) => {
+    this._contentEl.querySelectorAll('[data-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        this._tab = btn.dataset.tab;
-        this._render();
+        const tab = btn.dataset.tab;
+        if (tab && this._tab !== tab) {
+          this._switchTab(tab);
+        }
       });
     });
 
-    sr.querySelectorAll('[data-mode]').forEach((btn) => {
+    this._contentEl.querySelectorAll('[data-mode]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this._setSelect('charging_mode', btn.dataset.mode);
       });
     });
 
-    sr.querySelectorAll('[data-select]').forEach((sel) => {
+    this._contentEl.querySelectorAll('[data-select]').forEach((sel) => {
       sel.addEventListener('change', () => {
         this._setSelect(sel.dataset.select, sel.value);
       });
     });
 
-    sr.querySelectorAll('[data-switch]').forEach((chk) => {
+    this._contentEl.querySelectorAll('[data-switch]').forEach((chk) => {
       chk.addEventListener('change', () => {
         this._setSwitch(chk.dataset.switch, chk.checked);
       });
     });
 
-    sr.querySelectorAll('[data-num-slider]').forEach((slider) => {
+    this._contentEl.querySelectorAll('[data-num-slider]').forEach((slider) => {
       const key = slider.dataset.numSlider;
       slider.addEventListener('input', () => {
-        const numInp = sr.querySelector(`[data-num-input="${key}"]`);
+        const numInp = this._contentEl.querySelector(`[data-num-input="${key}"]`);
         if (numInp) numInp.value = slider.value;
-        const lbl = sr.getElementById(`lbl-${key}`);
+        const lbl = this._contentEl.querySelector(`#lbl-${key}`);
         if (lbl) {
           const unit = slider.dataset.unit || (key.includes('soc') ? '%' : key.includes('current') ? 'A' : '');
           lbl.textContent = `${slider.value}${unit ? ' ' + unit : ''}`;
@@ -2411,19 +2651,19 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
-    sr.querySelectorAll('[data-num-input]').forEach((inp) => {
+    this._contentEl.querySelectorAll('[data-num-input]').forEach((inp) => {
       const key = inp.dataset.numInput;
       inp.addEventListener('change', () => {
         this._setNumber(key, inp.value);
       });
     });
 
-    sr.querySelectorAll('[data-sim-slider]').forEach((slider) => {
+    this._contentEl.querySelectorAll('[data-sim-slider]').forEach((slider) => {
       const simId = slider.dataset.simSlider;
       slider.addEventListener('input', () => {
-        const inp = sr.querySelector(`[data-sim-input="${simId}"]`);
+        const inp = this._contentEl.querySelector(`[data-sim-input="${simId}"]`);
         if (inp) inp.value = slider.value;
-        const lbl = sr.getElementById(`sim-lbl-${simId}`);
+        const lbl = this._contentEl.querySelector(`[id="sim-lbl-${simId}"]`);
         if (lbl) lbl.textContent = `${slider.value} ${slider.dataset.unit || ''}`;
       });
       slider.addEventListener('change', async () => {
@@ -2436,7 +2676,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
-    sr.querySelectorAll('[data-sim-input]').forEach((inp) => {
+    this._contentEl.querySelectorAll('[data-sim-input]').forEach((inp) => {
       const simId = inp.dataset.simInput;
       inp.addEventListener('change', async () => {
         await this._hass.callService('input_number', 'set_value', {
@@ -2448,7 +2688,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
-    sr.querySelectorAll('[data-sim-bool]').forEach((chk) => {
+    this._contentEl.querySelectorAll('[data-sim-bool]').forEach((chk) => {
       const simId = chk.dataset.simBool;
       chk.addEventListener('change', async () => {
         await this._hass.callService('input_boolean', chk.checked ? 'turn_on' : 'turn_off', {
@@ -2459,7 +2699,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
-    sr.querySelectorAll('[data-preset]').forEach((btn) => {
+    this._contentEl.querySelectorAll('[data-preset]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const p = btn.dataset.preset;
         if (p === 'idle') {
@@ -2481,14 +2721,14 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
-    sr.querySelectorAll('[data-trace-filter]').forEach((btn) => {
+    this._contentEl.querySelectorAll('[data-trace-filter]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this._traceFilter = btn.dataset.traceFilter;
-        this._render();
+        this._renderContent();
       });
     });
 
-    sr.querySelectorAll('[data-action]').forEach((btn) => {
+    this._contentEl.querySelectorAll('[data-action]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const act = btn.dataset.action;
         if (act === 'copy-traces') {
@@ -2532,7 +2772,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
       });
     });
 
-    sr.querySelectorAll('[data-copy-text]').forEach((btn) => {
+    this._contentEl.querySelectorAll('[data-copy-text]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const text = btn.dataset.copyText;
         if (text) {
