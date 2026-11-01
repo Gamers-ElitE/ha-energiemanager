@@ -1619,7 +1619,9 @@ class SamEnergiemanagerPanel extends HTMLElement {
           eid.startsWith('input_number.sim_') ||
           eid.startsWith('input_boolean.sim_') ||
           eid.includes('tesla_ble') ||
-          eid.includes('klima_')
+          eid.includes('klima_') ||
+          eid.includes('anker_') ||
+          eid.includes('solarbank')
         ) {
           ids.add(eid);
         }
@@ -1778,7 +1780,46 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const homeSt = this._stateObj('home_power_watts');
     const homeAttrs = (homeSt && homeSt.attributes) || {};
     const pvW = isFinite(Number(homeAttrs.pv_power_watts)) ? Number(homeAttrs.pv_power_watts) : 0;
-    const batW = isFinite(Number(homeAttrs.battery_power_watts)) ? Number(homeAttrs.battery_power_watts) : 0;
+    let batW = isFinite(Number(homeAttrs.battery_power_watts)) ? Number(homeAttrs.battery_power_watts) : 0;
+    if (batW === 0) {
+      const batPwrSt = this._sourceState('battery_power_sensor');
+      if (batPwrSt && isFinite(Number(batPwrSt.state))) {
+        batW = Number(batPwrSt.state);
+      } else {
+        const chgSt = this._sourceState('battery_charge_sensor');
+        const disSt = this._sourceState('battery_discharge_sensor');
+        const chg = chgSt && isFinite(Number(chgSt.state)) ? Number(chgSt.state) : 0;
+        const dis = disSt && isFinite(Number(disSt.state)) ? Number(disSt.state) : 0;
+        if (chg > 10) batW = -chg;
+        else if (dis > 10) batW = dis;
+      }
+    }
+    if (batW === 0 && this._hass && this._hass.states) {
+      const states = this._hass.states;
+      const chgSensors = [
+        'sensor.anker_solix_solarbank_max_ac_345_batterieladeleistung',
+        'sensor.solarbank_battery_charge_power',
+      ];
+      const disSensors = [
+        'sensor.anker_solix_solarbank_max_ac_345_batterieentladeleistung',
+        'sensor.solarbank_battery_discharge_power',
+      ];
+      for (const s of chgSensors) {
+        if (states[s] && isFinite(Number(states[s].state)) && Number(states[s].state) > 10) {
+          batW = -Number(states[s].state);
+          break;
+        }
+      }
+      if (batW === 0) {
+        for (const s of disSensors) {
+          if (states[s] && isFinite(Number(states[s].state)) && Number(states[s].state) > 10) {
+            batW = Number(states[s].state);
+            break;
+          }
+        }
+      }
+    }
+
     const dailyHomeKwh = this._num('daily_home_kwh', Number(homeAttrs.daily_home_kwh) || 0);
     const dailyPvKwh = this._num('daily_pv_kwh', Number(homeAttrs.daily_pv_kwh) || 0);
     const dailyImportKwh = this._num('daily_grid_import_kwh', Number(homeAttrs.daily_grid_import_kwh) || 0);
@@ -1842,10 +1883,12 @@ class SamEnergiemanagerPanel extends HTMLElement {
     const gridColor = isExporting ? 'var(--em-grid-export)' : isImporting ? 'var(--em-grid-import)' : 'var(--primary-text-color)';
     const gridSub = isExporting ? 'Netzeinspeisung (Überschuss)' : isImporting ? 'Netzbezug' : 'Ausbalanciert (Nulleinspeisung)';
 
-    const batFlowActive = Math.abs(batW) > 15 || (hasSurplusFlow && batPriorityActive) || (!batLock && isImporting);
-    const dhwFlowActive = dhwActive || dhwPowerW > 50;
+    const batCharging = batW < -15;
+    const batDischarging = batW > 15;
+    const batFlowActive = batCharging || batDischarging;
+    const dhwFlowActive = dhwPowerW > 30 || (dhwActive && dhwPowerW === 0);
     const acFlowActive = acActive;
-    const evFlowActive = evAmps >= 3 || evW > 50;
+    const evFlowActive = evW > 30 || (evAmps >= 3 && sessionActive);
 
     const solarSharePct = evW > 0 ? Math.round((evSolarW / evW) * 100) : 100;
     const isFastMode = mode === 'fast' || mode === 'fast_charge';
@@ -1871,11 +1914,11 @@ class SamEnergiemanagerPanel extends HTMLElement {
     }
 
     const batPowerLabel =
-      batW < -10
+      batCharging
         ? `⚡ Lädt mit ${_fmtNum(Math.abs(batW), 0)} W`
-        : batW > 10
+        : batDischarging
           ? `🔋 Entlädt mit ${_fmtNum(batW, 0)} W`
-          : `Reserve-Ziel: ${_fmtNum(reserveSoc, 0)} %`;
+          : `💤 Standby (0 W)`;
 
     return `
       <!-- Compact Daily Energy Overview -->
@@ -1983,7 +2026,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
             <path class="em-flow-line-bg" d="M 400 0 C 400 26, 300 22, 300 52"/>
             <path class="em-flow-line-bg" d="M 400 0 C 400 26, 500 22, 500 52"/>
             <path class="em-flow-line-bg" d="M 400 0 C 400 26, 700 22, 700 52"/>
-            ${batFlowActive ? `<path class="em-flow-line-anim" stroke="#3b82f6" d="M 400 0 C 400 26, 100 22, 100 52"/>` : ''}
+            ${batCharging ? `<path class="em-flow-line-anim" stroke="#3b82f6" d="M 400 0 C 400 26, 100 22, 100 52"/>` : batDischarging ? `<path class="em-flow-line-anim em-flow-line-rev" stroke="#3b82f6" d="M 400 0 C 400 26, 100 22, 100 52"/>` : ''}
             ${dhwFlowActive ? `<path class="em-flow-line-anim" stroke="#f97316" d="M 400 0 C 400 26, 300 22, 300 52"/>` : ''}
             ${acFlowActive ? `<path class="em-flow-line-anim" stroke="#06b6d4" d="M 400 0 C 400 26, 500 22, 500 52"/>` : ''}
             ${evFlowActive ? `<path class="em-flow-line-anim" stroke="#8b5cf6" d="M 400 0 C 400 26, 700 22, 700 52"/>` : ''}
@@ -1992,7 +2035,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
           <!-- Bottom Row: 4 Priority Consumer Nodes -->
           <div class="em-flow-consumers">
             <!-- Node 1: Anker Solarbank -->
-            <div class="em-flow-node ${batPriorityActive ? 'active-battery' : ''} ${batLock ? 'locked-battery' : ''}">
+            <div class="em-flow-node ${batFlowActive ? 'active-battery' : ''} ${batLock ? 'locked-battery' : ''}">
               <div class="em-node-head">
                 <span class="em-node-title">🔋 Anker Solarbank</span>
                 <span class="em-prio-tag">Prio 2</span>
@@ -2006,7 +2049,7 @@ class SamEnergiemanagerPanel extends HTMLElement {
                   <div class="em-node-sub">
                     <strong>${batPowerLabel}</strong><br>
                     ${batControlEnabled && batTargetMode !== 'stop'
-                      ? (batTargetMode === 'charge' ? `⚡ Laden: ${_fmtNum(batTargetPower, 0)} W` : `⚡ Entladen: ${_fmtNum(batTargetPower, 0)} W`)
+                      ? (batTargetMode === 'charge' ? `⚡ Soll: Laden ${_fmtNum(batTargetPower, 0)} W` : `⚡ Soll: Entladen ${_fmtNum(batTargetPower, 0)} W`)
                       : (batPriorityActive ? `Vorrang bis ${_fmtNum(reserveSoc, 0)} %` : `Reserve (${_fmtNum(reserveSoc, 0)} %) erreicht`)}
                   </div>
                 </div>
@@ -2015,8 +2058,8 @@ class SamEnergiemanagerPanel extends HTMLElement {
                 <span class="em-pill ${batLock ? 'warn' : 'ok'}">
                   ${batLock ? '🔒 Entladesperre aktiv' : '🔓 Entladung frei'}
                 </span>
-                <span class="em-pill">
-                  ${batControlEnabled ? (batTargetMode === 'charge' ? '⚡ Lädt Überschuss' : batTargetMode === 'discharge' ? '🔋 Stützt Netzbezug' : 'Standby (0 W)') : (batPriorityActive ? '⏳ Verbraucher warten' : '✅ Überschuss freigegeben')}
+                <span class="em-pill ${batCharging ? 'info' : batDischarging ? 'ok' : ''}">
+                  ${batCharging ? '⚡ Lädt Überschuss' : batDischarging ? '🔋 Stützt Netzbezug' : 'Standby (0 W)'}
                 </span>
               </div>
             </div>
