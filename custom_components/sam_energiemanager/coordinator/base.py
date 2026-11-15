@@ -489,6 +489,8 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 yield_to_higher_priority=ev_yield,
                 in_deadband=in_deadband,
             )
+        else:
+            await self._async_poll_ev_telemetry(now_utc)
 
         # E. EV Charging Session Tracking & Energy Split
         ev_solar_w, ev_grid_w, completed_session = self.session_tracker.update(
@@ -941,7 +943,10 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         max_amps = int(self.tesla_max_current)
         was_charging = self._ev_charging_active
 
-        if self.charging_mode == CHARGING_MODE_FAST and ev_soc is not None and ev_soc >= self.tesla_target_soc:
+        fast_target_reached = (
+            self.charging_mode == CHARGING_MODE_FAST and ev_soc is not None and ev_soc >= self.tesla_target_soc
+        )
+        if fast_target_reached:
             self.charging_mode = CHARGING_MODE_OFF
             self._ev_fast_charge_target_amps = None
             self._ev_stop_reason = (
@@ -954,7 +959,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             self._ev_fast_charge_target_amps = None
             self._ev_low_surplus_since = None
             if not self._ev_stop_reason:
-                self._ev_stop_reason = "Lademodus ist 'Aus'"
+                self._ev_stop_reason = "Lademodus ist 'Aus' (manuelle Steuerung)"
         elif not ev_ready_at_home:
             self._ev_charging_active = False
             self._ev_target_amps = 0
@@ -1031,7 +1036,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             await self._async_wait_for_ev_awake()
             await self._async_poll_ev_telemetry(now_utc, force=True)
 
-        await self._async_sync_ev_actuators(was_charging=was_charging)
+        await self._async_sync_ev_actuators(stop_on_off=fast_target_reached)
         await self._async_poll_ev_telemetry(now_utc)
 
     async def _async_sync_battery_lock(self, *, ev_power: float = 0.0) -> None:
@@ -1564,10 +1569,19 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
         return None
 
+    def _is_ev_manually_charging(self) -> bool:
+        """Return True when the EV is plugged in, reachable, awake, and actively charging manually."""
+        ev_plugged = self._read_bool(CONF_EV_PLUGGED_BINARY_SENSOR, default=True)
+        ev_ble_connected = self._read_bool(CONF_EV_BLE_CONNECTED_BINARY_SENSOR, default=True)
+        if not (ev_plugged and ev_ble_connected and self._is_ev_awake()):
+            return False
+        ev_power = self._read_float(CONF_EV_POWER_SENSOR, 0.0, as_watts=True) or 0.0
+        return self._read_bool(CONF_EV_CHARGING_SWITCH) or ev_power > 100.0
+
     async def _async_poll_ev_telemetry(self, now_utc: datetime, *, force: bool = False) -> None:
         """Periodically refresh Tesla BLE telemetry during active charging without keeping it awake when idle."""
         # Never poll when vehicle is idle / not actively charging (to prevent phantom drain & preserve deep sleep)
-        if not self._ev_charging_active and not force:
+        if not self._ev_charging_active and not force and not self._is_ev_manually_charging():
             self._last_ev_poll_utc = None
             return
 
@@ -1664,7 +1678,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 value="done",
             )
 
-    async def _async_sync_ev_actuators(self, *, was_charging: bool = False) -> None:
+    async def _async_sync_ev_actuators(self, *, stop_on_off: bool = False) -> None:
         """Propagate target current and charging switch state to BLE/MQTT entities only on change."""
         number_id = self.config_entry.data.get(CONF_EV_CURRENT_NUMBER)
         if number_id and self._ev_target_amps >= EV_MIN_CURRENT_A and self.hass.states.get(number_id) is not None:
@@ -1708,7 +1722,7 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     details={"amps": self._ev_target_amps, "mode": self.charging_mode},
                 )
             elif not self._ev_charging_active and is_on:
-                if self.charging_mode != CHARGING_MODE_OFF or was_charging:
+                if self.charging_mode != CHARGING_MODE_OFF or stop_on_off:
                     await self.hass.services.async_call(
                         "switch",
                         SERVICE_TURN_OFF,

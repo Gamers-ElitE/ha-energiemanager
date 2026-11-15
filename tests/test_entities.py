@@ -757,3 +757,98 @@ async def test_ev_fast_charging_not_blocked_by_dhw_priority_and_cable_types(
     await hass.async_block_till_done()
 
     assert hass.states.get("sensor.energiemanager_ev_target_current").state == "10"
+
+
+async def test_charging_mode_off_disables_control_without_stopping_manual_charge(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Switching charging mode to 'off' leaves manual charging running, while fast auto-stop turns it off."""
+    turn_off_calls: list[str] = []
+
+    async def _handle_turn_off(call: ServiceCall) -> None:
+        entity_ids = call.data.get(ATTR_ENTITY_ID, [])
+        if isinstance(entity_ids, str):
+            turn_off_calls.append(entity_ids)
+        else:
+            turn_off_calls.extend(entity_ids)
+
+    hass.services.async_register(SWITCH_DOMAIN, SERVICE_TURN_OFF, _handle_turn_off)
+
+    # Start in fast mode with the EV charger switch actively on.
+    hass.states.async_set("switch.tesla_charger", "on")
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_FAST},
+        blocking=True,
+    )
+    assert "switch.tesla_charger" not in turn_off_calls
+
+    # Switching to 'off' must NOT turn off the EV charger switch so manual charging continues.
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_OFF},
+        blocking=True,
+    )
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert "switch.tesla_charger" not in turn_off_calls
+
+    # Switching back to fast mode and reaching the target SoC MUST still auto-stop the charger.
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_FAST},
+        blocking=True,
+    )
+    hass.states.async_set("sensor.tesla_soc", "80")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("select.energiemanager_ev_charging_mode").state == CHARGING_MODE_OFF
+    assert "switch.tesla_charger" in turn_off_calls
+
+
+async def test_manual_charging_polls_ble_telemetry_and_tracks_session_when_off(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Manual charging in 'off' mode still polls BLE telemetry and tracks session energy."""
+    press_calls: list[str] = []
+
+    async def _handle_press(call: ServiceCall) -> None:
+        entity_ids = call.data.get(ATTR_ENTITY_ID, [])
+        if isinstance(entity_ids, str):
+            press_calls.append(entity_ids)
+        else:
+            press_calls.extend(entity_ids)
+
+    hass.services.async_register("button", "press", _handle_press)
+    hass.states.async_set("button.tesla_force_update_env", "unknown")
+
+    # Switch to 'off' while EV is idle -> must NOT poll BLE
+    hass.states.async_set("switch.tesla_charger", "off")
+    hass.states.async_set("sensor.tesla_charging_power", "0")
+    await hass.services.async_call(
+        SELECT_DOMAIN,
+        SERVICE_SELECT_OPTION,
+        {ATTR_ENTITY_ID: "select.energiemanager_ev_charging_mode", ATTR_OPTION: CHARGING_MODE_OFF},
+        blocking=True,
+    )
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert press_calls == []
+
+    # Now start manual charging (awake + plugged + BLE connected + switch on / power > 100 W)
+    hass.states.async_set("binary_sensor.tesla_plugged", "on")
+    hass.states.async_set("binary_sensor.tesla_ble_connected", "on")
+    hass.states.async_set("binary_sensor.tesla_awake", "on")
+    hass.states.async_set("switch.tesla_charger", "on")
+    hass.states.async_set("sensor.tesla_charging_power", "2300")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert "button.tesla_force_update_env" in press_calls
+    assert hass.states.get("binary_sensor.energiemanager_ev_charging_session_active").state == "on"
