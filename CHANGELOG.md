@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.4](https://github.com/Gamers-ElitE/ha-energiemanager/compare/v0.1.3...v0.1.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* allow manual ev charging in off mode with ble telemetry polling ([c7516cd](https://github.com/Gamers-ElitE/ha-energiemanager/commit/c7516cd3c10d16125b783d86fc1764ac5e234683))
+* **ci:** use default-days cooldown for devcontainers in dependabot.yml ([04604b7](https://github.com/Gamers-ElitE/ha-energiemanager/commit/04604b75b491cea7bca1571a4404d76926a28140))
+* ignore stale ev power when vehicle is unplugged or asleep ([a541619](https://github.com/Gamers-ElitE/ha-energiemanager/commit/a54161993009775bb76f5876db1bc8a5d2ce00d9))
+* **skills:** remove blueprint-only link from skills README ([1988611](https://github.com/Gamers-ElitE/ha-energiemanager/commit/198861101cd1836ee23f4859a4b72ec11264ad1f))
+
 ## [0.1.3](https://github.com/Gamers-ElitE/ha-energiemanager/compare/v0.1.2...v0.1.3) (2026-11-01)
 
 
