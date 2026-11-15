@@ -336,6 +336,11 @@ class EnergiemanagerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             ev_power = (self._read_float(CONF_EV_CURRENT_NUMBER, 0.0) or 0.0) * EV_VOLTAGE
         ev_soc = self._read_float(CONF_EV_SOC_SENSOR)
         ev_plugged = self._read_bool(CONF_EV_PLUGGED_BINARY_SENSOR, default=True)
+        awake_entity = self.resolve_ev_awake_entity()
+        awake_state = self.hass.states.get(awake_entity) if awake_entity else None
+        ev_explicitly_asleep = awake_state is not None and awake_state.state.lower() in ("off", "false", "0")
+        if not ev_plugged or ev_explicitly_asleep:
+            ev_power = 0.0
         ev_ble_connected = self._read_bool(CONF_EV_BLE_CONNECTED_BINARY_SENSOR, default=True)
         has_wakeup = bool(self.config_entry.data.get(CONF_EV_WAKEUP_BUTTON))
         ev_ready_at_home = ev_plugged and (ev_ble_connected or has_wakeup)

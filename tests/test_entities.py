@@ -852,3 +852,37 @@ async def test_manual_charging_polls_ble_telemetry_and_tracks_session_when_off(
 
     assert "button.tesla_force_update_env" in press_calls
     assert hass.states.get("binary_sensor.energiemanager_ev_charging_session_active").state == "on"
+
+
+async def test_stale_ev_power_ignored_when_unplugged_or_asleep(
+    init_integration: MockConfigEntry,
+    hass: HomeAssistant,
+) -> None:
+    """Stale EV power readings must not trigger battery discharge lock when unplugged or asleep."""
+    # Stale 2300 W while car is asleep -> ev_power clamped to 0, lock stays off
+    hass.states.async_set("binary_sensor.tesla_plugged", "on")
+    hass.states.async_set("binary_sensor.tesla_awake", "off")
+    hass.states.async_set("sensor.tesla_charging_power", "2300")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.energiemanager_ev_charging_power").state == "0.0"
+    assert hass.states.get("binary_sensor.energiemanager_battery_discharge_lock_active").state == "off"
+
+    # Stale 2300 W while car is unplugged -> ev_power clamped to 0, lock stays off
+    hass.states.async_set("binary_sensor.tesla_plugged", "off")
+    hass.states.async_set("binary_sensor.tesla_awake", "on")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.energiemanager_ev_charging_power").state == "0.0"
+    assert hass.states.get("binary_sensor.energiemanager_battery_discharge_lock_active").state == "off"
+
+    # Awake and plugged in with 2300 W -> ev_power active, battery discharge lock activates
+    hass.states.async_set("binary_sensor.tesla_plugged", "on")
+    hass.states.async_set("binary_sensor.tesla_awake", "on")
+    await init_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.energiemanager_ev_charging_power").state == "2300.0"
+    assert hass.states.get("binary_sensor.energiemanager_battery_discharge_lock_active").state == "on"
